@@ -293,7 +293,7 @@ def adapt_drum_line(drum_line, tempo, velocity_scaling_factor=1.0):
     for velocity, pitch, start_beat, end_beat in drum_line:
         start_time = start_beat * quarter_note_duration
         end_time = end_beat * quarter_note_duration
-        adapted_velocity = int(velocity * velocity_scaling_factor)
+        adapted_velocity = max(0, min(127, int(velocity * velocity_scaling_factor)))  # Clamp to valid MIDI range
         adapted_line.append([adapted_velocity, pitch, start_time, end_time])
 
     return adapted_line
