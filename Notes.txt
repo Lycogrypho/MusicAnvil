@@ -1,0 +1,107 @@
+#---
+#Scale:
+#
+#    Chromatic, or dodecatonic (12 notes per octave)
+#    Nonatonic (9 notes per octave): a chromatic variation of the heptatonic blues scale
+#    Octatonic (8 notes per octave): used in jazz and modern classical music
+#    Heptatonic (7 notes per octave): the most common modern Western scale
+#    Hexatonic (6 notes per octave): common in Western folk music
+#    Pentatonic (5 notes per octave): the anhemitonic form (lacking semitones) is common in folk music, especially in Asian music; also known as the "black note" scale
+#    Tetratonic (4 notes),
+#    tritonic (3 notes), and
+#    ditonic (2 notes): generally limited to prehistoric ("primitive") music
+#Scale Occidentali:
+#    The chromatic scale (twelve notes)
+#    The whole-tone scale (six notes)
+#    The pentatonic scale (five notes)
+#    The octatonic or diminished scales (eight notes)
+#    The Phrygian dominant scale (a mode of the harmonic minor scale)
+#    The Arabic scales
+#    The Hungarian minor scale
+#    The Byzantine music scales (called echoi)
+#    The Persian scale
+#
+#
+#15 equal temperament
+#16 equal temperament
+#17 equal temperament
+#19 equal temperament
+#21 equal temperament
+#Acoustic scale or Lydian dominant scale 1 2 3 ♯4 5 6 ♭7
+#Aeolian mode or natural minor scale     1 2 ♭3 4 5 ♭6 ♭7
+#Algerian scale	1 2 ♭3 ♯4 5 ♭6 7 etc.
+#Alpha scale
+#Altered scale or Super Locrian scale 	1 ♭2 ♭3 ♭4 ♭5 ♭6 ♭7
+#Augmented scale 	1 ♭3 3 5 ♯5 7
+#Bebop dominant scale 	1 2 3 4 5 6 ♭7 7
+#Beta scale 	— 	Playⓘ 	— 	— 	— 	18.75 	— 	— 	—
+#Blues scaleⓘ 	1 ♭3 4 ♭5 5 ♭7
+#Bohlen–Pierce scale
+#Chromatic scale	1 ♯1 2 ♯2 3 4 ♯4 5 ♯5 6 ♯6 7 ♭7 6 ♭6 5 ♭5 4 3 ♭3 2 ♭2 1
+#Delta scale
+#Dorian mode 	1 2 ♭3 4 5 6 ♭7
+#Double harmonic scale	1 ♭2 3 4 5 ♭6 7
+#Enigmatic scale	1 ♭2 3 ♯4 ♯5 ♯6 7
+#Euler–Fokker genus
+#Flamenco mode 	1 ♭2 3 4 5 ♭6 7
+#Gamma scale
+#"Gypsy" scale 	1 2 ♭3 ♯4 5 ♭6 ♭7
+#Half diminished scale 	1 2 ♭3 4 ♭5 ♭6 ♭7
+#Harmonic major scale 	1 2 3 4 5 ♭6 7
+#Harmonic minor scale 	1 2 ♭3 4 5 ♭6 (♮)7
+#Harmonic Scale
+#Harmonic scale
+#Hexany
+#Hirajoshi scale	1 3 ♯4 5 7
+#Hungarian "Gypsy" scale/Hungarian minor scale	1 2 ♭3 ♯4 5 ♭6 7
+#Hungarian major scale	1 ♯2 3 ♯4 5 6 ♭7
+#Miyako-bushi scale on D, equivalent to in scale on D, with brackets on fourths. 	1 ♭2 4 5 ♭6
+#Insen scale 	1 ♭2 4 5 ♭7 	H-2W-W-3H-W
+#Ionian mode or major scale 	1 2 3 4 5 6 7
+#Istrian scale 	1 ♭2 ♭3 ♭4 ♭5 5
+#Iwato scale 	1 ♭2 4 ♭5 ♭7
+#Locrian mode 	1 ♭2 ♭3 4 ♭5 ♭6 ♭7
+#Locrian 6 		1 ♭2 ♭3 4 ♭5 6 ♭7
+#Lydian augmented scale 	1 2 3 ♯4 ♯5 6 7
+#Lydian diminished scale	1 2 ♭3 ♯4 5 6 7
+#Lydian mode 	1 2 3 ♯4 5 6 7
+#Major bebop scale 	1 2 3 4 5 (♯5/♭6) 6 7
+#Major Locrian scale 	1 2 3 4 ♭5 ♭6 ♭7
+#Major pentatonic scale 	1 2 3 5 6
+#The A melodic minor scale, ascending and descending, on A	1 2 ♭3 4 5 ♮6 ♮7 8 ♭7 ♭6 5 4 ♭3 2 1
+#Melodic minor scale (ascending)	1 2 ♭3 4 5 6 7
+#Minor pentatonic scale	1 ♭3 4 5 ♭7
+#Mixolydian mode or Adonai malakh mode	1 2 3 4 5 6 ♭7
+#Neapolitan major scale 	1 ♭2 ♭3 4 5 6 7
+#Neapolitan minor scale 	1 ♭2 ♭3 4 5 ♭6 7
+#Octatonic scale 	1 2 ♭3 4 ♭5 ♭6 6 7 1 ♭2 ♭3 3 ♯4 5 6 ♭7
+#Pelog
+#Persian scale	1 ♭2 3 4 ♭5 ♭6 7
+#Phrygian dominant scale	1 ♭2 3 4 5 ♭6 ♭7
+#Phrygian mode  	1 ♭2 ♭3 4 5 ♭6 ♭7
+#Prometheus scale	1 2 3 ♯4 6 ♭7
+#Quarter tone scale 	1 half sharp1 ♯1 three quarter sharp1 2 half sharp2 ♯2 three quarter sharp2 3 half sharp3 4 half sharp4 ♯4 three quarter sharp4 5 half sharp5 ♯5 three quarter sharp5 6 half sharp6 ♯6 three quarter sharp6 7 half sharp
+#half flat8 7 half flat7 ♭7 three quarter flat7 6 half flat6 ♭6 three quarter flat6 5 half flat5 ♭5 three quarter flat5 4 half flat4 3 half flat3 ♭3 three quarter flat3 2 half flat2 ♭2 three quarter flat2 1
+#Scale of harmonics	1 ♭3 3 4 5 6
+#Slendro
+#Tritone scale 1 ♭2 3 ♭5 5 ♭7
+#Two-semitone tritone scale	1 ♭2 ♮2 ♯4 5 ♭6
+#Ukrainian Dorian scale	1 2 ♭3 ♯4 5 6 ♭7
+#Vietnamese scale of harmonics	1 three quarter flat3 ♭3 ♮3 4 5
+#Whole tone scale 	1 2 3 ♯4 ♯5 ♯6
+#Yo scale
+#
+# note number 1 ♯1  2 ♯2  3  4 ♯4  5 ♯5  6 ♯6  7
+# note index  0  1  2  3  4  5  6  7  8  9 10 11
+# note name   C C#  D D#  E  F F#  G G#  A A#  B
+
+################################
+#Drums:
+# Each drum has a note number
+#    MIDI note number 35: Acoustic Bass Drum
+#    MIDI note number 38: Acoustic Snare
+#    MIDI note number 42: Closed Hi-Hat
+#    MIDI note number 49: Crash Cymbal 1
+#    MIDI note number 57: Tambourine
+
+# normally percussions are written on midi channel 10
