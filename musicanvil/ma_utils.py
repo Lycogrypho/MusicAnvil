@@ -222,8 +222,10 @@ def generate_scale(scale_name, tonic):
     scale_notes = []
     for octave in range(3):
         for interval in intervals:
-            note_index = (tonic_index + interval + octave * 12) % 12  # Wrap around using modulo
-            scale_notes.append(notes_in_octave[note_index] + str(octave + 4))  # Octave number starting from 4
+            semitone = tonic_index + interval + octave * 12  # Absolute semitones above C4
+            note_name = notes_in_octave[semitone % 12]
+            octave_number = 4 + semitone // 12  # Carry into the next octave when notes wrap past B
+            scale_notes.append(note_name + str(octave_number))
     return scale_notes
 
 
