@@ -13,7 +13,7 @@ And it needs no Artificial Intelligence to do so...
 
 ## Requirements
 
-- Python 3.12
+- Python 3.13
 - `pretty_midi`
 
 ```
