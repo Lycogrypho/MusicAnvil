@@ -1,150 +1,385 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
-import pretty_midi
+try:
+    from musicanvil import composer, ma_utils
+except ImportError:  # script-directory launch
+    import composer
+    import ma_utils
 
-from musicanvil import ma_utils
 
-_INSTRUMENT_PROGRAMS = {
-    "Piano":  0,   # Acoustic Grand Piano
-    "Guitar": 25,  # Acoustic Guitar (steel)
-    "Bass":   32,  # Acoustic Bass
-    "Violin": 40,  # Violin
-}
+# OopCompanion:suppressRename
 
-instruments = list(_INSTRUMENT_PROGRAMS.keys()) + ["Drums"]
+MELODIC_INSTRUMENTS = list(composer.INSTRUMENT_PROGRAMS.keys())
+NONE_CHOICE = "(none)"
+SIGNATURE_OPTIONS = ["4/4", "2/2", "2/4", "3/4", "6/8"]
+
+
+def fmt_mmss(seconds):
+    """Format a duration in seconds as MM:SS."""
+    minutes, secs = divmod(int(round(seconds)), 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+class RoleEditor:
+    """Main + supports pickers for the three melodic roles, one column per role."""
+
+    def __init__(self, parent, defaults=None):
+        defaults = defaults or {}
+        self.main_vars = {}
+        self.support_boxes = {}
+        for column, role in enumerate(composer.ROLES):
+            frame = tk.LabelFrame(parent, text=role)
+            frame.grid(row=0, column=column, padx=5, pady=5, sticky="n")
+            tk.Label(frame, text="Main:").grid(row=0, column=0, sticky="w")
+            var = tk.StringVar(value=defaults.get(role, NONE_CHOICE))
+            if role == composer.ROLE_LEAD:
+                values = MELODIC_INSTRUMENTS
+            else:
+                values = [NONE_CHOICE] + MELODIC_INSTRUMENTS
+            ttk.Combobox(frame, textvariable=var, values=values,
+                         state="readonly", width=12).grid(row=0, column=1, padx=2, pady=2)
+            tk.Label(frame, text="Supports:").grid(row=1, column=0, sticky="nw")
+            box = tk.Listbox(frame, selectmode=tk.MULTIPLE, height=5, width=14, exportselection=False)
+            for instrument in MELODIC_INSTRUMENTS:
+                box.insert(tk.END, instrument)
+            box.grid(row=1, column=1, padx=2, pady=2)
+            self.main_vars[role] = var
+            self.support_boxes[role] = box
+
+    def get_roles(self):
+        roles = {}
+        for role in composer.ROLES:
+            main = self.main_vars[role].get()
+            main = None if main in ("", NONE_CHOICE) else main
+            supports = [MELODIC_INSTRUMENTS[i] for i in self.support_boxes[role].curselection()]
+            supports = [s for s in supports if s != main]
+            roles[role] = composer.RoleAssignment(main=main, supports=supports)
+        return roles
+
+    def set_roles(self, roles):
+        for role in composer.ROLES:
+            assignment = roles.get(role) or composer.RoleAssignment()
+            self.main_vars[role].set(assignment.main or NONE_CHOICE)
+            box = self.support_boxes[role]
+            box.selection_clear(0, tk.END)
+            for i, instrument in enumerate(MELODIC_INSTRUMENTS):
+                if instrument in assignment.supports:
+                    box.selection_set(i)
 
 
 class MusicGeneratorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Music Generator")
+        self.root.title("MusicAnvil — Piece Builder")
 
-        # Tempo
-        tk.Label(root, text="Tempo:").grid(row=0, column=0, padx=10, pady=10)
-        self.tempo_var = tk.IntVar(value=120)
-        tk.Entry(root, textvariable=self.tempo_var).grid(row=0, column=1, padx=10, pady=10)
+        self.sections = {}   # name -> composer.SectionSpec
+        self.structure = []  # ordered section names
 
-        # Signature
-        tk.Label(root, text="Signature:").grid(row=1, column=0, padx=10, pady=10)
+        notebook = ttk.Notebook(root)
+        notebook.pack(fill="both", expand=True, padx=5, pady=5)
+        self.piece_tab = tk.Frame(notebook)
+        self.sections_tab = tk.Frame(notebook)
+        notebook.add(self.piece_tab, text="Piece")
+        notebook.add(self.sections_tab, text="Sections")
+
+        self._build_piece_tab()
+        self._build_sections_tab()
+
+    # ------------------------------------------------------------- Piece tab
+
+    def _build_piece_tab(self):
+        defaults = tk.LabelFrame(self.piece_tab, text="Piece Defaults")
+        defaults.grid(row=0, column=0, padx=10, pady=10, sticky="nw")
+
+        tk.Label(defaults, text="Tempo (BPM):").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        self.tempo_var = tk.StringVar(value="120")
+        tk.Entry(defaults, textvariable=self.tempo_var, width=8).grid(row=0, column=1, padx=5, pady=3)
+
+        tk.Label(defaults, text="Signature:").grid(row=1, column=0, sticky="w", padx=5, pady=3)
         self.signature_var = tk.StringVar(value="4/4")
-        signature_options = ["4/4", "2/2", "2/4", "3/4", "6/8"]
-        ttk.Combobox(root, textvariable=self.signature_var, values=signature_options).grid(row=1, column=1, padx=10, pady=10)
+        ttk.Combobox(defaults, textvariable=self.signature_var, values=SIGNATURE_OPTIONS,
+                     state="readonly", width=6).grid(row=1, column=1, padx=5, pady=3)
 
-        # Rhythm
-        tk.Label(root, text="Rhythm:").grid(row=2, column=0, padx=10, pady=10)
+        tk.Label(defaults, text="Genre (drums):").grid(row=2, column=0, sticky="w", padx=5, pady=3)
         self.rhythm_var = tk.StringVar(value=list(ma_utils.drum_lines.keys())[0])
-        ttk.Combobox(root, textvariable=self.rhythm_var, values=list(ma_utils.drum_lines.keys())).grid(row=2, column=1, padx=10, pady=10)
+        ttk.Combobox(defaults, textvariable=self.rhythm_var, values=list(ma_utils.drum_lines.keys()),
+                     state="readonly", width=14).grid(row=2, column=1, padx=5, pady=3)
 
-        # Scale
-        tk.Label(root, text="Scale:").grid(row=3, column=0, padx=10, pady=10)
+        tk.Label(defaults, text="Scale:").grid(row=3, column=0, sticky="w", padx=5, pady=3)
         self.scale_var = tk.StringVar(value=list(ma_utils.scale_definitions.keys())[0])
-        ttk.Combobox(root, textvariable=self.scale_var, values=list(ma_utils.scale_definitions.keys())).grid(row=3, column=1, padx=10, pady=10)
+        ttk.Combobox(defaults, textvariable=self.scale_var, values=list(ma_utils.scale_definitions.keys()),
+                     state="readonly", width=14).grid(row=3, column=1, padx=5, pady=3)
 
-        # Tonic Note
-        tk.Label(root, text="Tonic Note:").grid(row=4, column=0, padx=10, pady=10)
+        tk.Label(defaults, text="Tonic Note:").grid(row=4, column=0, sticky="w", padx=5, pady=3)
         self.tonic_var = tk.StringVar(value=ma_utils.notes_in_octave[0])
-        ttk.Combobox(root, textvariable=self.tonic_var, values=ma_utils.notes_in_octave).grid(row=4, column=1, padx=10, pady=10)
+        ttk.Combobox(defaults, textvariable=self.tonic_var, values=ma_utils.notes_in_octave,
+                     state="readonly", width=6).grid(row=4, column=1, padx=5, pady=3)
 
-        # Instruments
-        tk.Label(root, text="Instruments:").grid(row=5, column=0, padx=10, pady=10)
-        self.instruments_listbox = tk.Listbox(root, selectmode=tk.MULTIPLE, exportselection=False)
-        for instrument in instruments:
-            self.instruments_listbox.insert(tk.END, instrument)
-        self.instruments_listbox.grid(row=5, column=1, padx=10, pady=10)
-
-        # Lead Instrument
-        tk.Label(root, text="Lead Instrument:").grid(row=6, column=0, padx=10, pady=10)
-        self.lead_instrument_var = tk.StringVar(value=instruments[0])
-        ttk.Combobox(root, textvariable=self.lead_instrument_var, values=instruments).grid(row=6, column=1, padx=10, pady=10)
-
-        # FileName
-        tk.Label(root, text="FileName:").grid(row=7, column=0, padx=10, pady=10)
+        tk.Label(defaults, text="FileName:").grid(row=5, column=0, sticky="w", padx=5, pady=3)
         self.filename_var = tk.StringVar(value="output")
-        tk.Entry(root, textvariable=self.filename_var).grid(row=7, column=1, padx=10, pady=10)
+        tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=5, column=1, padx=5, pady=3)
 
-        # Duration
-        tk.Label(root, text="Duration (MM:SS):").grid(row=8, column=0, padx=10, pady=10)
-        self.duration_var = tk.StringVar(value="00:30")
-        tk.Entry(root, textvariable=self.duration_var).grid(row=8, column=1, padx=10, pady=10)
+        roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
+        roles_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nw")
+        self.piece_roles = RoleEditor(roles_frame, defaults={
+            composer.ROLE_LEAD: "Piano",
+            composer.ROLE_ACCOMPANIMENT: "Guitar",
+            composer.ROLE_BASS: "Bass",
+        })
 
-        # Generate button
-        tk.Button(root, text="Generate", command=self._generate).grid(
-            row=9, column=0, columnspan=2, pady=20
+        structure = tk.LabelFrame(self.piece_tab, text="Piece Structure")
+        structure.grid(row=0, column=1, rowspan=2, padx=10, pady=10, sticky="n")
+
+        self.structure_listbox = tk.Listbox(structure, height=14, width=26, exportselection=False)
+        self.structure_listbox.grid(row=0, column=0, columnspan=3, padx=5, pady=5)
+
+        self.add_section_var = tk.StringVar()
+        self.add_section_combo = ttk.Combobox(structure, textvariable=self.add_section_var,
+                                              values=[], state="readonly", width=16)
+        self.add_section_combo.grid(row=1, column=0, columnspan=2, padx=5, pady=3)
+        tk.Button(structure, text="Add", command=self._add_to_structure).grid(row=1, column=2, padx=5, pady=3)
+
+        tk.Button(structure, text="Remove", command=self._remove_from_structure).grid(row=2, column=0, padx=5, pady=3)
+        tk.Button(structure, text="Move Up", command=lambda: self._move_in_structure(-1)).grid(row=2, column=1, padx=5, pady=3)
+        tk.Button(structure, text="Move Down", command=lambda: self._move_in_structure(1)).grid(row=2, column=2, padx=5, pady=3)
+
+        self.total_label = tk.Label(structure, text="Total duration: 00:00")
+        self.total_label.grid(row=3, column=0, columnspan=3, pady=5)
+
+        tk.Button(structure, text="Generate", command=self._generate).grid(row=4, column=0, columnspan=3, pady=10)
+
+    def _add_to_structure(self):
+        name = self.add_section_var.get()
+        if not name:
+            messagebox.showerror("Error", "Create a section in the Sections tab first, then pick it here.")
+            return
+        self.structure.append(name)
+        self.structure_listbox.insert(tk.END, name)
+        self._update_total()
+
+    def _remove_from_structure(self):
+        selection = self.structure_listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        self.structure_listbox.delete(index)
+        del self.structure[index]
+        self._update_total()
+
+    def _move_in_structure(self, delta):
+        selection = self.structure_listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        target = index + delta
+        if not (0 <= target < len(self.structure)):
+            return
+        self.structure[index], self.structure[target] = self.structure[target], self.structure[index]
+        name = self.structure_listbox.get(index)
+        self.structure_listbox.delete(index)
+        self.structure_listbox.insert(target, name)
+        self.structure_listbox.selection_set(target)
+        self._update_total()
+
+    def _update_total(self):
+        try:
+            piece = self._current_piece_spec()
+            total = composer.piece_seconds(piece) if piece.structure else 0.0
+            self.total_label.config(text=f"Total duration: {fmt_mmss(total)}")
+        except Exception:
+            self.total_label.config(text="Total duration: --:--")
+
+    # ---------------------------------------------------------- Sections tab
+
+    def _build_sections_tab(self):
+        library = tk.LabelFrame(self.sections_tab, text="Section Library")
+        library.grid(row=0, column=0, padx=10, pady=10, sticky="n")
+
+        self.library_listbox = tk.Listbox(library, height=14, width=20, exportselection=False)
+        self.library_listbox.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+        self.library_listbox.bind("<<ListboxSelect>>", self._load_section)
+
+        tk.Button(library, text="New Section", command=self._new_section).grid(row=1, column=0, padx=5, pady=3)
+        tk.Button(library, text="Delete", command=self._delete_section).grid(row=1, column=1, padx=5, pady=3)
+
+        editor = tk.LabelFrame(self.sections_tab, text="Section Editor")
+        editor.grid(row=0, column=1, padx=10, pady=10, sticky="n")
+
+        tk.Label(editor, text="Bars:").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        self.bars_var = tk.StringVar(value="4")
+        tk.Spinbox(editor, from_=1, to=128, textvariable=self.bars_var, width=6).grid(row=0, column=1, sticky="w", padx=5, pady=3)
+
+        # Override rows: checkbox enables the field, otherwise the piece default is used.
+        self.sec_override = {}
+
+        def override_row(row, key, label, widget_values, width):
+            check_var = tk.BooleanVar(value=False)
+            tk.Checkbutton(editor, text=label, variable=check_var).grid(row=row, column=0, sticky="w", padx=5, pady=3)
+            value_var = tk.StringVar()
+            if widget_values is None:
+                tk.Entry(editor, textvariable=value_var, width=width).grid(row=row, column=1, sticky="w", padx=5, pady=3)
+            else:
+                ttk.Combobox(editor, textvariable=value_var, values=widget_values,
+                             state="readonly", width=width).grid(row=row, column=1, sticky="w", padx=5, pady=3)
+            self.sec_override[key] = (check_var, value_var)
+
+        override_row(1, "tempo", "Override Tempo (BPM)", None, 8)
+        override_row(2, "signature", "Override Signature", SIGNATURE_OPTIONS, 6)
+        override_row(3, "rhythm", "Override Genre (drums)", list(ma_utils.drum_lines.keys()), 14)
+        override_row(4, "scale", "Override Scale", list(ma_utils.scale_definitions.keys()), 14)
+        override_row(5, "tonic", "Override Tonic Note", ma_utils.notes_in_octave, 6)
+
+        self.sec_roles_override_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(editor, text="Override Roles", variable=self.sec_roles_override_var).grid(
+            row=6, column=0, sticky="w", padx=5, pady=3)
+        roles_holder = tk.Frame(editor)
+        roles_holder.grid(row=7, column=0, columnspan=2, padx=5, pady=3)
+        self.sec_roles = RoleEditor(roles_holder)
+
+        self.sec_duration_label = tk.Label(editor, text="Duration: --:--")
+        self.sec_duration_label.grid(row=8, column=0, columnspan=2, pady=5)
+
+        tk.Button(editor, text="Apply", command=self._apply_section).grid(row=9, column=0, columnspan=2, pady=10)
+
+    def _selected_library_name(self):
+        selection = self.library_listbox.curselection()
+        if not selection:
+            return None
+        return self.library_listbox.get(selection[0])
+
+    def _new_section(self):
+        name = simpledialog.askstring("New Section", "Section name (e.g. intro, verse A, chorus):",
+                                      parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if name in self.sections:
+            messagebox.showerror("Error", f"A section named '{name}' already exists.")
+            return
+        self.sections[name] = composer.SectionSpec(name=name)
+        self.library_listbox.insert(tk.END, name)
+        self._refresh_section_choices()
+
+    def _delete_section(self):
+        name = self._selected_library_name()
+        if name is None:
+            return
+        if not messagebox.askyesno("Delete Section", f"Delete section '{name}'? "
+                                   "It will also be removed from the piece structure."):
+            return
+        selection = self.library_listbox.curselection()
+        self.library_listbox.delete(selection[0])
+        del self.sections[name]
+        # Remove every occurrence from the structure (walk backwards to keep indices valid).
+        for index in range(len(self.structure) - 1, -1, -1):
+            if self.structure[index] == name:
+                del self.structure[index]
+                self.structure_listbox.delete(index)
+        self._refresh_section_choices()
+        self._update_total()
+
+    def _load_section(self, _event=None):
+        name = self._selected_library_name()
+        if name is None:
+            return
+        spec = self.sections[name]
+        self.bars_var.set(str(spec.bars))
+        loaders = {
+            "tempo": None if spec.tempo is None else str(spec.tempo),
+            "signature": None if spec.signature is None else f"{spec.signature[0]}/{spec.signature[1]}",
+            "rhythm": spec.rhythm,
+            "scale": spec.scale,
+            "tonic": spec.tonic,
+        }
+        for key, value in loaders.items():
+            check_var, value_var = self.sec_override[key]
+            check_var.set(value is not None)
+            value_var.set(value if value is not None else "")
+        self.sec_roles_override_var.set(bool(spec.roles))
+        self.sec_roles.set_roles(spec.roles if spec.roles else {})
+        self._update_section_duration(spec)
+
+    def _apply_section(self):
+        name = self._selected_library_name()
+        if name is None:
+            messagebox.showerror("Error", "Select a section in the library first.")
+            return
+        try:
+            spec = composer.SectionSpec(name=name, bars=int(self.bars_var.get()))
+            if spec.bars <= 0:
+                raise ValueError("Bars must be a positive number.")
+            check_var, value_var = self.sec_override["tempo"]
+            if check_var.get():
+                spec.tempo = int(value_var.get())
+                if spec.tempo <= 0:
+                    raise ValueError("Tempo must be a positive number.")
+            check_var, value_var = self.sec_override["signature"]
+            if check_var.get():
+                spec.signature = composer.parse_signature(value_var.get())
+            for key in ("rhythm", "scale", "tonic"):
+                check_var, value_var = self.sec_override[key]
+                if check_var.get():
+                    value = value_var.get()
+                    if not value:
+                        raise ValueError(f"Pick a value for the overridden {key}.")
+                    setattr(spec, key, value)
+            if self.sec_roles_override_var.get():
+                spec.roles = self.sec_roles.get_roles()
+        except ValueError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+        self.sections[name] = spec
+        self._update_section_duration(spec)
+        self._refresh_section_choices()
+        self._update_total()
+
+    def _update_section_duration(self, spec):
+        try:
+            piece = self._current_piece_spec()
+            resolved = composer.resolve_section(spec, piece)
+            seconds = composer.section_seconds(resolved.bars, resolved.tempo, resolved.signature)
+            self.sec_duration_label.config(text=f"Duration: {fmt_mmss(seconds)}")
+        except Exception:
+            self.sec_duration_label.config(text="Duration: --:--")
+
+    def _refresh_section_choices(self):
+        self.add_section_combo.config(values=list(self.sections.keys()))
+
+    # ------------------------------------------------------------ Generation
+
+    def _current_piece_spec(self):
+        tempo = int(self.tempo_var.get())
+        if tempo <= 0:
+            raise ValueError("Tempo must be a positive number.")
+        piece = composer.PieceSpec(
+            tempo=tempo,
+            signature=composer.parse_signature(self.signature_var.get()),
+            rhythm=self.rhythm_var.get(),
+            scale=self.scale_var.get(),
+            tonic=self.tonic_var.get(),
+            roles=self.piece_roles.get_roles(),
+            sections=dict(self.sections),
+            structure=list(self.structure),
         )
-
-    def _parse_duration(self):
-        """Parse MM:SS string → total seconds (int)."""
-        raw = self.duration_var.get().strip()
-        parts = raw.split(":")
-        if len(parts) != 2:
-            raise ValueError(f"Duration must be MM:SS, got '{raw}'")
-        return int(parts[0]) * 60 + int(parts[1])
-
-    def _parse_signature(self):
-        """Parse 'N/D' string → (numerator, denominator) tuple."""
-        raw = self.signature_var.get().strip()
-        parts = raw.split("/")
-        if len(parts) != 2:
-            raise ValueError(f"Signature must be N/D, got '{raw}'")
-        return int(parts[0]), int(parts[1])
+        if piece.roles[composer.ROLE_LEAD].main is None:
+            raise ValueError("A main Lead instrument is required.")
+        return piece
 
     def _generate(self):
         try:
-            tempo = self.tempo_var.get()
-            if tempo <= 0:
-                raise ValueError("Tempo must be a positive number.")
-            time_signature = self._parse_signature()
-            beat_duration = self._parse_duration()
-            if beat_duration <= 0:
-                raise ValueError("Duration must be greater than 00:00.")
-            scale = self.scale_var.get()
-            tonic = self.tonic_var.get()
-            rhythm = self.rhythm_var.get()
+            piece = self._current_piece_spec()
+            if not piece.structure:
+                raise ValueError("The piece structure is empty — add at least one section.")
             filename = self.filename_var.get().strip() or "output"
             if not filename.endswith(".mid"):
                 filename += ".mid"
-
-            # Build available MIDI pitches from the chosen scale
-            note_names = ma_utils.generate_scale(scale, tonic)
-            available_pitches = [pretty_midi.note_name_to_number(n) for n in note_names]
-
-            midi_data = pretty_midi.PrettyMIDI(initial_tempo=tempo)
-
-            selected_indices = self.instruments_listbox.curselection()
-            selected_instruments = [instruments[i] for i in selected_indices] or [instruments[0]]
-
-            for name in selected_instruments:
-                if name == "Drums":
-                    drum_inst = pretty_midi.Instrument(program=0, is_drum=True, name="Drums")
-                    adapted = ma_utils.adapt_drum_line(ma_utils.drum_lines[rhythm], tempo)
-                    # Pattern length = end time of the last entry in one repetition
-                    pattern_len = max(entry[3] for entry in adapted)
-                    t = 0.0
-                    while t < beat_duration:
-                        for velocity, pitch, start, end in adapted:
-                            note_start = t + start
-                            note_end = t + end
-                            if note_start >= beat_duration:
-                                continue
-                            drum_inst.notes.append(pretty_midi.Note(
-                                velocity=velocity,
-                                pitch=pitch,
-                                start=note_start,
-                                end=min(note_end, beat_duration),
-                            ))
-                        t += pattern_len
-                    midi_data.instruments.append(drum_inst)
-                else:
-                    program = _INSTRUMENT_PROGRAMS[name]
-                    inst = pretty_midi.Instrument(program=program, name=name)
-                    for note in ma_utils.generate_random_beat(available_pitches, tempo, time_signature, beat_duration):
-                        inst.notes.append(note)
-                    midi_data.instruments.append(inst)
-
+            midi_data = composer.render_piece(piece)
             midi_data.write(filename)
-            messagebox.showinfo("Done", f"MIDI saved to {filename}")
-
+            total = composer.piece_seconds(piece)
+            messagebox.showinfo("Done", f"MIDI saved to {filename} ({fmt_mmss(total)})")
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
 

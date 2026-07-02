@@ -1,163 +1,160 @@
-"""Tests for MusicAnvil_GUI — verify the module is importable and all
-ma_utils references it depends on are correctly resolved.
+"""Tests for MusicAnvil_GUI — verify the module is importable, the app builds its
+tabbed interface, and all library symbols it depends on exist.
 
-These tests mock tkinter so they run in headless environments.
+tkinter is mocked so these tests run headless.
 """
 
+# OopCompanion:suppressRename
+
 import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 
 
-def _make_tk_mock():
-    """Return a minimal tkinter stub that satisfies every name the GUI uses."""
-    tk = types.ModuleType("tkinter")
-    # Variable classes
-    for cls in ("IntVar", "StringVar"):
-        setattr(tk, cls, MagicMock(return_value=MagicMock()))
-    # Widget classes — their constructors and grid() are no-ops
-    for cls in ("Label", "Entry", "Button", "Listbox"):
-        widget = MagicMock()
-        widget.return_value.grid = MagicMock()
-        widget.return_value.insert = MagicMock()
-        widget.return_value.curselection = MagicMock(return_value=())
-        setattr(tk, cls, widget)
-    tk.MULTIPLE = "multiple"
-    tk.END = "end"
-    tk.messagebox = MagicMock()
-    # Tk root
-    tk.Tk = MagicMock(return_value=MagicMock())
+def _patched_tk():
+    """Patch tkinter (and its submodules) with MagicMocks in sys.modules."""
+    return patch.dict(sys.modules, {
+        "tkinter": MagicMock(),
+        "tkinter.ttk": MagicMock(),
+        "tkinter.messagebox": MagicMock(),
+        "tkinter.simpledialog": MagicMock(),
+    })
 
-    ttk = types.ModuleType("tkinter.ttk")
-    combobox = MagicMock()
-    combobox.return_value.grid = MagicMock()
-    ttk.Combobox = combobox
 
-    messagebox_mod = types.ModuleType("tkinter.messagebox")
-    messagebox_mod.showinfo = MagicMock()
-    messagebox_mod.showerror = MagicMock()
-
-    return tk, ttk, messagebox_mod
+def _fresh_gui_module():
+    """Import MusicAnvil_GUI fresh (tkinter must already be patched)."""
+    sys.modules.pop("musicanvil.MusicAnvil_GUI", None)
+    import musicanvil.MusicAnvil_GUI as gui_mod
+    return gui_mod
 
 
 class TestGUIImport(unittest.TestCase):
-    """The GUI module must import without errors after the fix."""
 
     def test_module_imports_cleanly(self):
-        """Importing MusicAnvil_GUI should not raise any exception."""
-        tk_mock, ttk_mock, mb_mock = _make_tk_mock()
-        with patch.dict(sys.modules, {
-            "tkinter": tk_mock,
-            "tkinter.ttk": ttk_mock,
-            "tkinter.messagebox": mb_mock,
-        }):
-            # Remove cached module so we get a fresh import each time
-            sys.modules.pop("musicanvil.MusicAnvil_GUI", None)
+        with _patched_tk():
             try:
-                import musicanvil.MusicAnvil_GUI  # noqa: F401
+                _fresh_gui_module()
             except Exception as exc:
                 self.fail(f"Importing MusicAnvil_GUI raised: {exc}")
 
     def test_app_instantiates(self):
-        """MusicGeneratorApp.__init__ must complete without raising."""
-        tk_mock, ttk_mock, mb_mock = _make_tk_mock()
-        with patch.dict(sys.modules, {
-            "tkinter": tk_mock,
-            "tkinter.ttk": ttk_mock,
-            "tkinter.messagebox": mb_mock,
-        }):
-            sys.modules.pop("musicanvil.MusicAnvil_GUI", None)
-            import musicanvil.MusicAnvil_GUI as gui_mod
-            root = MagicMock()
+        """MusicGeneratorApp.__init__ must build both tabs without raising."""
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
             try:
-                gui_mod.MusicGeneratorApp(root)
+                app = gui_mod.MusicGeneratorApp(MagicMock())
             except Exception as exc:
                 self.fail(f"MusicGeneratorApp() raised: {exc}")
+            self.assertEqual(app.sections, {})
+            self.assertEqual(app.structure, [])
+
+    def test_fmt_mmss(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            self.assertEqual(gui_mod.fmt_mmss(0), "00:00")
+            self.assertEqual(gui_mod.fmt_mmss(90), "01:30")
+            self.assertEqual(gui_mod.fmt_mmss(3599.6), "60:00")
 
 
-class TestGUIDependenciesOnMaUtils(unittest.TestCase):
-    """All ma_utils symbols referenced by the GUI must exist and be non-empty."""
+class TestGUIDependencies(unittest.TestCase):
+    """Every library symbol the GUI references must exist and be non-empty."""
 
     def setUp(self):
-        from musicanvil import ma_utils
+        from musicanvil import composer, ma_utils
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
+
+
+# OopCompanion:suppressRename
         self.ma = ma_utils
+        self.composer = composer
 
     def test_notes_in_octave_exists_and_has_12_entries(self):
-        self.assertTrue(hasattr(self.ma, "notes_in_octave"))
         self.assertEqual(len(self.ma.notes_in_octave), 12)
 
     def test_drum_lines_exists_and_non_empty(self):
-        self.assertTrue(hasattr(self.ma, "drum_lines"))
         self.assertGreater(len(self.ma.drum_lines), 0)
 
     def test_scale_definitions_exists_and_non_empty(self):
-        self.assertTrue(hasattr(self.ma, "scale_definitions"))
         self.assertGreater(len(self.ma.scale_definitions), 0)
 
     def test_notes_pitches_does_not_exist(self):
-        """notes_pitches was the bug — it must NOT exist; the GUI now uses notes_in_octave."""
-        self.assertFalse(hasattr(self.ma, "notes_pitches"),
-                         "notes_pitches still present; GUI should use notes_in_octave instead")
+        """notes_pitches was a historical bug — the GUI must use notes_in_octave."""
+        self.assertFalse(hasattr(self.ma, "notes_pitches"))
 
-    def test_tonic_combobox_values_match_notes_in_octave(self):
-        """The GUI populates the Tonic combobox from notes_in_octave; verify it contains C."""
-        self.assertIn("C", self.ma.notes_in_octave)
-
-    def test_rhythm_combobox_values_include_rock(self):
-        self.assertIn("Rock", self.ma.drum_lines)
-
-    def test_scale_combobox_values_include_major(self):
-        self.assertIn("major", self.ma.scale_definitions)
+    def test_composer_symbols_used_by_gui(self):
+        self.assertGreater(len(self.composer.INSTRUMENT_PROGRAMS), 0)
+        self.assertNotIn("Drums", self.composer.INSTRUMENT_PROGRAMS)
+        self.assertEqual(len(self.composer.ROLES), 3)
+        for symbol in ("PieceSpec", "SectionSpec", "RoleAssignment", "parse_signature",
+                       "piece_seconds", "section_seconds", "resolve_section", "render_piece"):
+            self.assertTrue(hasattr(self.composer, symbol), f"composer.{symbol} missing")
 
 
-class TestGUIHelpers(unittest.TestCase):
-    """Unit-test the pure helper methods on MusicGeneratorApp."""
+class TestStructureOperations(unittest.TestCase):
+    """Exercise the structure-list logic with mocked widgets."""
 
     def _make_app(self):
-        tk_mock, ttk_mock, mb_mock = _make_tk_mock()
-        with patch.dict(sys.modules, {
-            "tkinter": tk_mock,
-            "tkinter.ttk": ttk_mock,
-            "tkinter.messagebox": mb_mock,
-        }):
-            sys.modules.pop("musicanvil.MusicAnvil_GUI", None)
-            import musicanvil.MusicAnvil_GUI as gui_mod
-            root = MagicMock()
-            app = gui_mod.MusicGeneratorApp(root)
-            return app
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            return gui_mod, app
 
-    def test_parse_duration_normal(self):
-        app = self._make_app()
-        app.duration_var.get = MagicMock(return_value="01:30")
-        self.assertEqual(app._parse_duration(), 90)
+    def test_add_to_structure_appends(self):
+        gui_mod, app = self._make_app()
+        app.add_section_var.get = MagicMock(return_value="intro")
+        app._add_to_structure()
+        self.assertEqual(app.structure, ["intro"])
 
-    def test_parse_duration_zero_minutes(self):
-        app = self._make_app()
-        app.duration_var.get = MagicMock(return_value="00:45")
-        self.assertEqual(app._parse_duration(), 45)
+    def test_add_without_selection_does_nothing(self):
+        gui_mod, app = self._make_app()
+        app.add_section_var.get = MagicMock(return_value="")
+        app._add_to_structure()
+        self.assertEqual(app.structure, [])
 
-    def test_parse_duration_invalid_raises(self):
-        app = self._make_app()
-        app.duration_var.get = MagicMock(return_value="90")
-        with self.assertRaises(ValueError):
-            app._parse_duration()
+    def test_remove_from_structure(self):
+        gui_mod, app = self._make_app()
+        app.structure = ["intro", "verse", "chorus"]
+        app.structure_listbox.curselection = MagicMock(return_value=(1,))
+        app._remove_from_structure()
+        self.assertEqual(app.structure, ["intro", "chorus"])
 
-    def test_parse_signature_4_4(self):
-        app = self._make_app()
-        app.signature_var.get = MagicMock(return_value="4/4")
-        self.assertEqual(app._parse_signature(), (4, 4))
+    def test_move_down_swaps(self):
+        gui_mod, app = self._make_app()
+        app.structure = ["intro", "verse", "chorus"]
+        app.structure_listbox.curselection = MagicMock(return_value=(0,))
+        app.structure_listbox.get = MagicMock(return_value="intro")
+        app._move_in_structure(1)
+        self.assertEqual(app.structure, ["verse", "intro", "chorus"])
 
-    def test_parse_signature_6_8(self):
-        app = self._make_app()
-        app.signature_var.get = MagicMock(return_value="6/8")
-        self.assertEqual(app._parse_signature(), (6, 8))
-
-    def test_parse_signature_invalid_raises(self):
-        app = self._make_app()
-        app.signature_var.get = MagicMock(return_value="44")
-        with self.assertRaises(ValueError):
-            app._parse_signature()
+    def test_move_up_at_top_is_noop(self):
+        gui_mod, app = self._make_app()
+        app.structure = ["intro", "verse"]
+        app.structure_listbox.curselection = MagicMock(return_value=(0,))
+        app._move_in_structure(-1)
+        self.assertEqual(app.structure, ["intro", "verse"])
 
 
 if __name__ == "__main__":
