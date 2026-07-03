@@ -256,8 +256,8 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
 
     Returns a list of pretty_midi.Note objects.
     """
-    quarter_note_duration = 60.0 / tempo                       # Duration of a quarter note in seconds
-    base_duration = quarter_note_duration / time_signature[1]  # Base unit from the time signature
+    quarter_note_duration = 60.0 / tempo                           # Duration of a quarter note in seconds
+    base_duration = quarter_note_duration * 4 / time_signature[1]  # Base unit from the time signature
 
     total_duration = 0
     beat_notes = []
