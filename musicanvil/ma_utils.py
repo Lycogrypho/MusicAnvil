@@ -258,6 +258,8 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
     """
     if not available_notes:
         raise ValueError("available_notes must not be empty.")
+    if tempo <= 0:
+        raise ValueError(f"tempo must be a positive number of BPM, got {tempo}.")
     quarter_note_duration = 60.0 / tempo                           # Duration of a quarter note in seconds
     base_duration = quarter_note_duration * 4 / time_signature[1]  # Base unit from the time signature
 
@@ -289,6 +291,8 @@ def adapt_drum_line(drum_line, tempo, velocity_scaling_factor=1.0):
 
     Returns a new drum line of [velocity, pitch, start_time, end_time] entries in seconds.
     """
+    if tempo <= 0:
+        raise ValueError(f"tempo must be a positive number of BPM, got {tempo}.")
     quarter_note_duration = 60.0 / tempo
 
     adapted_line = []

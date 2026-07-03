@@ -78,6 +78,36 @@ class TestGenerateRandomBeatBaseUnit(unittest.TestCase):
             self.assertLessEqual(note.end, beat_duration + 1e-9)
 
 
+class TestTempoValidation(unittest.TestCase):
+    """P2 #4 — generate_random_beat and adapt_drum_line must reject tempo ≤ 0."""
+
+    NOTES = [60, 62, 64]
+    DRUM_LINE = [[100, 35, 0, 1], [80, 38, 1, 2]]
+
+    def test_generate_random_beat_zero_tempo_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_random_beat(self.NOTES, tempo=0)
+
+    def test_generate_random_beat_negative_tempo_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_random_beat(self.NOTES, tempo=-60)
+
+    def test_adapt_drum_line_zero_tempo_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=0)
+
+    def test_adapt_drum_line_negative_tempo_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=-120)
+
+    def test_valid_tempo_does_not_raise(self):
+        try:
+            ma_utils.generate_random_beat(self.NOTES, tempo=120, beat_duration=1.0)
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120)
+        except ValueError:
+            self.fail("Unexpected ValueError for valid tempo=120")
+
+
 class TestGenerateRandomBeatGuards(unittest.TestCase):
     """P2 #3 — generate_random_beat must raise ValueError for empty available_notes."""
 
