@@ -13,6 +13,19 @@ except ImportError:  # script-directory launch
 MELODIC_INSTRUMENTS = list(MusicAnvil.INSTRUMENT_PROGRAMS.keys())
 NONE_CHOICE = "(none)"
 SIGNATURE_OPTIONS = ["4/4", "2/2", "2/4", "3/4", "6/8"]
+TRANSFORMER_OPTIONS = [NONE_CHOICE] + sorted(ma_utils.BEAT_TRANSFORMERS)
+
+
+def _entry_label(entry):
+    """Format a StructureEntry (or plain section name string) for the structure listbox."""
+    if isinstance(entry, str):
+        return entry
+    if entry.transformer is None:
+        return entry.section
+    if entry.transformer == "tone_shift":
+        n = entry.transformer_kwargs.get("n", 0)
+        return f"{entry.section} [{n:+d}]"
+    return f"{entry.section} [{entry.transformer}]"
 
 
 def fmt_mmss(seconds):
@@ -140,22 +153,50 @@ class MusicGeneratorApp:
         self.add_section_combo.grid(row=1, column=0, columnspan=2, padx=5, pady=3)
         tk.Button(structure, text="Add", command=self._add_to_structure).grid(row=1, column=2, padx=5, pady=3)
 
-        tk.Button(structure, text="Remove", command=self._remove_from_structure).grid(row=2, column=0, padx=5, pady=3)
-        tk.Button(structure, text="Move Up", command=lambda: self._move_in_structure(-1)).grid(row=2, column=1, padx=5, pady=3)
-        tk.Button(structure, text="Move Down", command=lambda: self._move_in_structure(1)).grid(row=2, column=2, padx=5, pady=3)
+        # Transformer row
+        transform_frame = tk.Frame(structure)
+        transform_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=2, sticky="w")
+        tk.Label(transform_frame, text="Transformer:").grid(row=0, column=0, sticky="w")
+        self.transform_var = tk.StringVar(value=NONE_CHOICE)
+        ttk.Combobox(transform_frame, textvariable=self.transform_var,
+                     values=TRANSFORMER_OPTIONS, state="readonly", width=11).grid(row=0, column=1, padx=(3, 8))
+        tk.Label(transform_frame, text="Shift n:").grid(row=0, column=2, sticky="w")
+        self.shift_var = tk.StringVar(value="0")
+        self.shift_spinbox = tk.Spinbox(transform_frame, from_=-127, to=127,
+                                        textvariable=self.shift_var, width=4, state="disabled")
+        self.shift_spinbox.grid(row=0, column=3, padx=(3, 0))
+        self.transform_var.trace_add("write", self._on_transform_changed)
+
+        tk.Button(structure, text="Remove", command=self._remove_from_structure).grid(row=3, column=0, padx=5, pady=3)
+        tk.Button(structure, text="Move Up", command=lambda: self._move_in_structure(-1)).grid(row=3, column=1, padx=5, pady=3)
+        tk.Button(structure, text="Move Down", command=lambda: self._move_in_structure(1)).grid(row=3, column=2, padx=5, pady=3)
 
         self.total_label = tk.Label(structure, text="Total duration: 00:00")
-        self.total_label.grid(row=3, column=0, columnspan=3, pady=5)
+        self.total_label.grid(row=4, column=0, columnspan=3, pady=5)
 
-        tk.Button(structure, text="Generate", command=self._generate).grid(row=4, column=0, columnspan=3, pady=10)
+        tk.Button(structure, text="Generate", command=self._generate).grid(row=5, column=0, columnspan=3, pady=10)
+
+    def _on_transform_changed(self, *_):
+        state = "normal" if self.transform_var.get() == "tone_shift" else "disabled"
+        self.shift_spinbox.config(state=state)
 
     def _add_to_structure(self):
         name = self.add_section_var.get()
         if not name:
             messagebox.showerror("Error", "Create a section in the Sections tab first, then pick it here.")
             return
-        self.structure.append(name)
-        self.structure_listbox.insert(tk.END, name)
+        transformer = self.transform_var.get()
+        transformer = None if transformer == NONE_CHOICE else transformer
+        kwargs = {}
+        if transformer == "tone_shift":
+            try:
+                kwargs["n"] = int(self.shift_var.get())
+            except ValueError:
+                messagebox.showerror("Error", "Shift n must be a whole number.")
+                return
+        entry = MusicAnvil.StructureEntry(section=name, transformer=transformer, transformer_kwargs=kwargs)
+        self.structure.append(entry)
+        self.structure_listbox.insert(tk.END, _entry_label(entry))
         self._update_total()
 
     def _remove_from_structure(self):
@@ -176,9 +217,8 @@ class MusicGeneratorApp:
         if not (0 <= target < len(self.structure)):
             return
         self.structure[index], self.structure[target] = self.structure[target], self.structure[index]
-        name = self.structure_listbox.get(index)
         self.structure_listbox.delete(index)
-        self.structure_listbox.insert(target, name)
+        self.structure_listbox.insert(target, _entry_label(self.structure[target]))
         self.structure_listbox.selection_set(target)
         self._update_total()
 

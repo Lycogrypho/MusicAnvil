@@ -227,5 +227,91 @@ class TestRenderPiece(unittest.TestCase):
         self.assertAlmostEqual(MusicAnvil.piece_seconds(piece), base_len * 2)
 
 
+class TestStructureTransformers(unittest.TestCase):
+    """Tests for StructureEntry transformer application inside render_piece."""
+
+    def _pitches(self, midi_data, instrument_name):
+        inst = next(i for i in midi_data.instruments if i.name == instrument_name)
+        return sorted(n.pitch for n in inst.notes)
+
+    def test_no_transformer_plain_string_still_works(self):
+        piece = _make_piece(structure=["A"])
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertTrue(any(i.name == "Piano" for i in midi.instruments))
+
+    def test_structure_entry_without_transformer_is_identical_to_string(self):
+        piece_str = _make_piece(structure=["A"])
+        piece_entry = _make_piece(structure=[MusicAnvil.StructureEntry(section="A")])
+        midi_str = MusicAnvil.render_piece(piece_str, random.Random(5))
+        midi_entry = MusicAnvil.render_piece(piece_entry, random.Random(5))
+        self.assertEqual(self._pitches(midi_str, "Piano"), self._pitches(midi_entry, "Piano"))
+
+    def test_tone_shift_raises_all_pitches(self):
+        piece_base = _make_piece(structure=["A"])
+        piece_shifted = _make_piece(structure=[
+            MusicAnvil.StructureEntry(section="A", transformer="tone_shift",
+                                      transformer_kwargs={"n": 12})])
+        base = MusicAnvil.render_piece(piece_base, random.Random(7))
+        shifted = MusicAnvil.render_piece(piece_shifted, random.Random(7))
+        base_pitches = self._pitches(base, "Piano")
+        shifted_pitches = self._pitches(shifted, "Piano")
+        self.assertEqual(shifted_pitches, [p + 12 for p in base_pitches])
+
+    def test_tone_shift_negative_lowers_pitches(self):
+        piece_base = _make_piece(structure=["A"])
+        piece_shifted = _make_piece(structure=[
+            MusicAnvil.StructureEntry(section="A", transformer="tone_shift",
+                                      transformer_kwargs={"n": -7})])
+        base = MusicAnvil.render_piece(piece_base, random.Random(3))
+        shifted = MusicAnvil.render_piece(piece_shifted, random.Random(3))
+        base_pitches = self._pitches(base, "Piano")
+        shifted_pitches = self._pitches(shifted, "Piano")
+        self.assertEqual(shifted_pitches, [max(0, p - 7) for p in base_pitches])
+
+    def test_invert_changes_non_first_pitches(self):
+        piece_base = _make_piece(structure=["A"])
+        piece_inv = _make_piece(structure=[
+            MusicAnvil.StructureEntry(section="A", transformer="invert")])
+        base = MusicAnvil.render_piece(piece_base, random.Random(9))
+        inv = MusicAnvil.render_piece(piece_inv, random.Random(9))
+        base_p = self._pitches(base, "Piano")
+        inv_p = self._pitches(inv, "Piano")
+        # At least one pitch must differ (invert is not an identity)
+        self.assertNotEqual(base_p, inv_p)
+
+    def test_drums_not_affected_by_tone_shift(self):
+        piece_base = _make_piece(structure=["A"])
+        piece_shifted = _make_piece(structure=[
+            MusicAnvil.StructureEntry(section="A", transformer="tone_shift",
+                                      transformer_kwargs={"n": 12})])
+        base = MusicAnvil.render_piece(piece_base, random.Random(2))
+        shifted = MusicAnvil.render_piece(piece_shifted, random.Random(2))
+        drums_base = sorted(n.pitch for i in base.instruments
+                            if i.name == MusicAnvil.DRUM_TRACK for n in i.notes)
+        drums_shifted = sorted(n.pitch for i in shifted.instruments
+                               if i.name == MusicAnvil.DRUM_TRACK for n in i.notes)
+        self.assertEqual(drums_base, drums_shifted)
+
+    def test_two_occurrences_different_transformers(self):
+        """Same section with different transformers must produce different note sets."""
+        piece = _make_piece(structure=[
+            MusicAnvil.StructureEntry(section="A"),
+            MusicAnvil.StructureEntry(section="A", transformer="tone_shift",
+                                      transformer_kwargs={"n": 5}),
+        ])
+        midi = MusicAnvil.render_piece(piece, random.Random(4))
+        section_len = MusicAnvil.section_seconds(2, 120, (4, 4))
+        piano = next(i for i in midi.instruments if i.name == "Piano")
+        first_pitches = sorted(n.pitch for n in piano.notes if n.start < section_len - 1e-9)
+        second_pitches = sorted(n.pitch for n in piano.notes if n.start >= section_len - 1e-9)
+        self.assertEqual(second_pitches, [p + 5 for p in first_pitches])
+
+    def test_unknown_transformer_raises(self):
+        piece = _make_piece(structure=[
+            MusicAnvil.StructureEntry(section="A", transformer="no_such_transform")])
+        with self.assertRaises(ValueError):
+            MusicAnvil.render_piece(piece, random.Random(1))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -126,7 +126,8 @@ class TestStructureOperations(unittest.TestCase):
         gui_mod, app = self._make_app()
         app.add_section_var.get = MagicMock(return_value="intro")
         app._add_to_structure()
-        self.assertEqual(app.structure, ["intro"])
+        self.assertEqual(len(app.structure), 1)
+        self.assertEqual(app.structure[0].section, "intro")
 
     def test_add_without_selection_does_nothing(self):
         gui_mod, app = self._make_app()

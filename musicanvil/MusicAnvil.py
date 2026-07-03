@@ -82,6 +82,21 @@ class SectionSpec:
 
 
 @dataclass
+class StructureEntry:
+    """One slot in the piece structure: a section name plus an optional beat transformer.
+
+    ``transformer`` must be a key in ``ma_utils.BEAT_TRANSFORMERS`` or ``None``.
+    ``transformer_kwargs`` is forwarded verbatim as keyword arguments to the transformer
+    function, so ``{"n": 3}`` is the right value for ``tone_shift``.
+    Plain strings are also accepted wherever a ``StructureEntry`` is expected — use
+    ``_as_entry()`` to normalise them.
+    """
+    section: str
+    transformer: str | None = None
+    transformer_kwargs: dict = field(default_factory=dict)
+
+
+@dataclass
 class PieceSpec:
     """Piece-wide defaults plus the section library and the ordered structure."""
     tempo: int = 120
@@ -91,7 +106,7 @@ class PieceSpec:
     tonic: str = "C"
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
-    structure: list[str] = field(default_factory=list)
+    structure: list[StructureEntry | str] = field(default_factory=list)
 
 
 @dataclass
@@ -149,13 +164,19 @@ def resolve_section(section, piece):
     )
 
 
+def _as_entry(item):
+    """Normalise a structure item to a StructureEntry (plain strings are accepted)."""
+    return item if isinstance(item, StructureEntry) else StructureEntry(section=item)
+
+
 def piece_seconds(piece):
     """Total duration in seconds of the piece structure."""
     total = 0.0
-    for name in piece.structure:
-        if name not in piece.sections:
-            raise ValueError(f"Section '{name}' is not in the section library.")
-        resolved = resolve_section(piece.sections[name], piece)
+    for item in piece.structure:
+        entry = _as_entry(item)
+        if entry.section not in piece.sections:
+            raise ValueError(f"Section '{entry.section}' is not in the section library.")
+        resolved = resolve_section(piece.sections[entry.section], piece)
         total += section_seconds(resolved.bars, resolved.tempo, resolved.signature)
     return total
 
@@ -319,12 +340,20 @@ def render_piece(piece, rng=None):
     rendered = {}
     combined = {}
     offset = 0.0
-    for name in piece.structure:
-        if name not in piece.sections:
-            raise ValueError(f"Section '{name}' is not in the section library.")
-        if name not in rendered:
-            rendered[name] = render_section(resolve_section(piece.sections[name], piece), rng)
-        tracks, length = rendered[name]
+    for item in piece.structure:
+        entry = _as_entry(item)
+        if entry.section not in piece.sections:
+            raise ValueError(f"Section '{entry.section}' is not in the section library.")
+        if entry.section not in rendered:
+            rendered[entry.section] = render_section(
+                resolve_section(piece.sections[entry.section], piece), rng)
+        tracks, length = rendered[entry.section]
+        if entry.transformer is not None:
+            fn = ma_utils.get_transformer(entry.transformer)
+            tracks = {
+                inst: (notes if inst == DRUM_TRACK else fn(notes, **entry.transformer_kwargs))
+                for inst, notes in tracks.items()
+            }
         for instrument, notes in tracks.items():
             destination = combined.setdefault(instrument, [])
             for note in notes:
@@ -347,7 +376,7 @@ __all__ = [
     "ROLE_LEAD", "ROLE_ACCOMPANIMENT", "ROLE_BASS", "ROLES", "DRUM_TRACK",
     "INSTRUMENT_PROGRAMS",
     "VELOCITY_LEAD", "VELOCITY_BASS", "VELOCITY_CHORD", "VELOCITY_SUPPORT",
-    "RoleAssignment", "SectionSpec", "PieceSpec", "ResolvedSection",
+    "RoleAssignment", "SectionSpec", "StructureEntry", "PieceSpec", "ResolvedSection",
     "parse_signature", "beat_seconds", "section_seconds", "resolve_section", "piece_seconds",
     "generate_lead_line", "generate_bass_line", "generate_chord_line", "derive_support_line",
     "render_section", "render_piece",
