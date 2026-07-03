@@ -291,6 +291,71 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
 
     return beat_notes
 
+## Beat Transformer Functions Section
+
+def tone_shift(beat, n):
+    """Return a new beat with every note shifted n semitones (positive = up, negative = down).
+
+    Pitches are clamped to the valid MIDI range [0, 127]. Start/end times and
+    velocities are preserved unchanged.
+    """
+    result = []
+    for note in beat:
+        result.append(pretty_midi.Note(
+            velocity=note.velocity,
+            pitch=max(0, min(127, note.pitch + n)),
+            start=note.start,
+            end=note.end,
+        ))
+    return result
+
+
+def invert(beat):
+    """Return a new beat with notes mirrored around the first note's pitch.
+
+    The first note is kept unchanged. Each subsequent note is replaced by its
+    reflection: new_pitch = 2 * pivot - original_pitch, where pivot is the
+    pitch of the first note. Pitches are clamped to [0, 127].
+
+    Example: E(64)-G(67)-F#(66) → E(64)-C#(61)-D(62)
+    """
+    if not beat:
+        return []
+    pivot = beat[0].pitch
+    result = []
+    for i, note in enumerate(beat):
+        new_pitch = note.pitch if i == 0 else max(0, min(127, 2 * pivot - note.pitch))
+        result.append(pretty_midi.Note(
+            velocity=note.velocity,
+            pitch=new_pitch,
+            start=note.start,
+            end=note.end,
+        ))
+    return result
+
+
+# Registry of all available beat transformers: name -> callable.
+# Zero-parameter transformers have signature (beat,).
+# Parameterised transformers have signature (beat, <extra args>).
+# Use functools.partial to fix parameters when a single-argument callable is needed.
+BEAT_TRANSFORMERS = {
+    "tone_shift": tone_shift,
+    "invert": invert,
+}
+
+## End of Beat Transformers Section
+
+def get_transformer(name):
+    """Return the beat-transformer registered under *name*.
+
+    Raises ValueError with the list of available names for unknown keys.
+    """
+    fn = BEAT_TRANSFORMERS.get(name)
+    if fn is None:
+        available = ", ".join(sorted(BEAT_TRANSFORMERS))
+        raise ValueError(f"Unknown transformer '{name}'. Available: {available}")
+    return fn
+
 
 def adapt_drum_line(drum_line, tempo, velocity_scaling_factor=1.0):
     """Convert a beat-relative drum line to absolute seconds at the given tempo.

@@ -44,8 +44,9 @@ DRUM_TRACK = "Drums"
 INSTRUMENT_PROGRAMS = {
     "Piano": 0,        # Acoustic Grand Piano
     "Organ": 19,       # Church Organ
-    "Guitar": 25,      # Acoustic Guitar (steel)
-    "Bass": 32,        # Acoustic Bass
+    "Guitar": 25,          # Acoustic Guitar (steel)
+    "Electric Guitar": 27, # Electric Guitar (clean)
+    "Bass": 32,            # Acoustic Bass
     "Violin": 40,      # Violin
     "Strings": 48,     # String Ensemble 1
     "Trumpet": 56,     # Trumpet

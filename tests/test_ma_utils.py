@@ -5,6 +5,8 @@
 import random
 import unittest
 
+import pretty_midi
+
 from musicanvil import ma_utils
 
 
@@ -263,6 +265,148 @@ class TestScaleDefinitionsModes(unittest.TestCase):
         # Mixolydian lowers the 7th → Bb (A#) in C mixolydian
         notes = ma_utils.generate_scale("mixolydian", "C")
         self.assertIn("A#4", notes)
+
+
+class TestBeatTransformers(unittest.TestCase):
+    """Tests for tone_shift, invert, BEAT_TRANSFORMERS registry, and get_transformer."""
+
+    def _note(self, pitch, start=0.0, end=0.5, velocity=80):
+        return pretty_midi.Note(velocity=velocity, pitch=pitch, start=start, end=end)
+
+    def _beat(self, pitches):
+        """Build a beat from a list of pitches with sequential 0.5 s slots."""
+        return [self._note(p, i * 0.5, (i + 1) * 0.5) for i, p in enumerate(pitches)]
+
+    # ------------------------------------------------------------------ tone_shift
+
+    def test_tone_shift_up(self):
+        beat = self._beat([60, 62, 64])
+        result = ma_utils.tone_shift(beat, 2)
+        self.assertEqual([n.pitch for n in result], [62, 64, 66])
+
+    def test_tone_shift_down(self):
+        beat = self._beat([60, 62, 64])
+        result = ma_utils.tone_shift(beat, -2)
+        self.assertEqual([n.pitch for n in result], [58, 60, 62])
+
+    def test_tone_shift_zero_is_identity(self):
+        beat = self._beat([60, 64, 67])
+        result = ma_utils.tone_shift(beat, 0)
+        self.assertEqual([n.pitch for n in result], [60, 64, 67])
+
+    def test_tone_shift_clamps_at_127(self):
+        beat = [self._note(126)]
+        result = ma_utils.tone_shift(beat, 5)
+        self.assertEqual(result[0].pitch, 127)
+
+    def test_tone_shift_clamps_at_0(self):
+        beat = [self._note(1)]
+        result = ma_utils.tone_shift(beat, -5)
+        self.assertEqual(result[0].pitch, 0)
+
+    def test_tone_shift_preserves_timing_and_velocity(self):
+        note = self._note(pitch=60, start=1.0, end=2.0, velocity=90)
+        result = ma_utils.tone_shift([note], 3)
+        self.assertEqual(result[0].start, 1.0)
+        self.assertEqual(result[0].end, 2.0)
+        self.assertEqual(result[0].velocity, 90)
+
+    def test_tone_shift_empty_beat(self):
+        self.assertEqual(ma_utils.tone_shift([], 5), [])
+
+    def test_tone_shift_does_not_mutate_input(self):
+        beat = self._beat([60, 62])
+        original_pitches = [n.pitch for n in beat]
+        ma_utils.tone_shift(beat, 7)
+        self.assertEqual([n.pitch for n in beat], original_pitches)
+
+    # ------------------------------------------------------------------ invert
+
+    def test_invert_example_from_spec(self):
+        # E(64)-G(67)-F#(66) → E(64)-C#(61)-D(62)
+        beat = self._beat([64, 67, 66])
+        result = ma_utils.invert(beat)
+        self.assertEqual([n.pitch for n in result], [64, 61, 62])
+
+    def test_invert_keeps_first_note_unchanged(self):
+        beat = self._beat([60, 65, 70])
+        result = ma_utils.invert(beat)
+        self.assertEqual(result[0].pitch, 60)
+
+    def test_invert_single_note_unchanged(self):
+        beat = [self._note(72)]
+        result = ma_utils.invert(beat)
+        self.assertEqual(result[0].pitch, 72)
+
+    def test_invert_empty_beat(self):
+        self.assertEqual(ma_utils.invert([]), [])
+
+    def test_invert_clamps_low(self):
+        # pivot=5, second note=120 → reflected = 2*5-120 = -110 → 0
+        beat = self._beat([5, 120])
+        result = ma_utils.invert(beat)
+        self.assertEqual(result[1].pitch, 0)
+
+    def test_invert_clamps_high(self):
+        # pivot=120, second note=5 → reflected = 2*120-5 = 235 → 127
+        beat = self._beat([120, 5])
+        result = ma_utils.invert(beat)
+        self.assertEqual(result[1].pitch, 127)
+
+    def test_invert_preserves_timing_and_velocity(self):
+        note0 = self._note(pitch=60, start=0.0, end=0.5, velocity=100)
+        note1 = self._note(pitch=64, start=0.5, end=1.0, velocity=80)
+        result = ma_utils.invert([note0, note1])
+        self.assertEqual(result[1].start, 0.5)
+        self.assertEqual(result[1].end, 1.0)
+        self.assertEqual(result[1].velocity, 80)
+
+    def test_invert_does_not_mutate_input(self):
+        beat = self._beat([60, 67])
+        original_pitches = [n.pitch for n in beat]
+        ma_utils.invert(beat)
+        self.assertEqual([n.pitch for n in beat], original_pitches)
+
+    def test_invert_is_own_inverse(self):
+        beat = self._beat([60, 64, 67, 62])
+        self.assertEqual(
+            [n.pitch for n in ma_utils.invert(ma_utils.invert(beat))],
+            [n.pitch for n in beat],
+        )
+
+    # ------------------------------------------------------------------ registry
+
+    def test_beat_transformers_contains_tone_shift(self):
+        self.assertIn("tone_shift", ma_utils.BEAT_TRANSFORMERS)
+
+    def test_beat_transformers_contains_invert(self):
+        self.assertIn("invert", ma_utils.BEAT_TRANSFORMERS)
+
+    def test_beat_transformers_values_are_callable(self):
+        for name, fn in ma_utils.BEAT_TRANSFORMERS.items():
+            self.assertTrue(callable(fn), f"BEAT_TRANSFORMERS['{name}'] is not callable")
+
+    def test_get_transformer_returns_correct_function(self):
+        self.assertIs(ma_utils.get_transformer("invert"), ma_utils.invert)
+        self.assertIs(ma_utils.get_transformer("tone_shift"), ma_utils.tone_shift)
+
+    def test_get_transformer_unknown_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            ma_utils.get_transformer("nonexistent")
+
+    def test_get_transformer_error_lists_available(self):
+        try:
+            ma_utils.get_transformer("nonexistent")
+        except ValueError as exc:
+            self.assertIn("invert", str(exc))
+            self.assertIn("tone_shift", str(exc))
+
+    def test_get_transformer_result_is_usable(self):
+        fn = ma_utils.get_transformer("invert")
+        beat = self._beat([60, 67])
+        result = fn(beat)
+        self.assertEqual(result[0].pitch, 60)
+        self.assertEqual(result[1].pitch, 53)  # 2*60-67
 
 
 if __name__ == "__main__":
