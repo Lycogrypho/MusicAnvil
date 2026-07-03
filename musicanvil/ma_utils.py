@@ -46,15 +46,21 @@ def write_notes_to_midi(notes, midi_file_path, instrument=None):
     """Write a list of pretty_midi.Note objects to a MIDI file.
 
     If no instrument is supplied, an Acoustic Grand Piano (program 0) is used. A fresh
-    instrument is created per call when omitted, so notes never leak between calls.
+    instrument is always created internally so the caller's object is never mutated.
     """
     if instrument is None:
-        instrument = pretty_midi.Instrument(program=0)
+        track = pretty_midi.Instrument(program=0)
+    else:
+        track = pretty_midi.Instrument(
+            program=instrument.program,
+            is_drum=instrument.is_drum,
+            name=instrument.name,
+        )
 
     midi_data = pretty_midi.PrettyMIDI()
     for note in notes:
-        instrument.notes.append(note)
-    midi_data.instruments.append(instrument)
+        track.notes.append(note)
+    midi_data.instruments.append(track)
     midi_data.write(midi_file_path)
 
 

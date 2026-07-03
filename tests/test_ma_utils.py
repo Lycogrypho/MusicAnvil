@@ -126,5 +126,72 @@ class TestGenerateRandomBeatGuards(unittest.TestCase):
             self.fail("generate_random_beat raised ValueError with a valid notes list")
 
 
+class TestWriteNotesToMidi(unittest.TestCase):
+    """P2 #5 — write_notes_to_midi must not mutate the caller's instrument object."""
+
+    def _make_note(self, pitch=60, start=0.0, end=0.5, velocity=80):
+        import pretty_midi
+        return pretty_midi.Note(velocity=velocity, pitch=pitch, start=start, end=end)
+
+    def test_passed_instrument_notes_unchanged_after_call(self):
+        """Calling write_notes_to_midi with an existing instrument must not add notes to it."""
+        import pretty_midi, tempfile, os
+        instrument = pretty_midi.Instrument(program=0)
+        note = self._make_note()
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            ma_utils.write_notes_to_midi([note], path, instrument=instrument)
+            self.assertEqual(len(instrument.notes), 0,
+                             "instrument.notes must not be modified by write_notes_to_midi")
+        finally:
+            os.unlink(path)
+
+    def test_second_call_does_not_accumulate_notes(self):
+        """Two calls with the same instrument must each write exactly the given notes."""
+        import pretty_midi, tempfile, os
+        instrument = pretty_midi.Instrument(program=0)
+        note1 = self._make_note(pitch=60, start=0.0, end=0.5)
+        note2 = self._make_note(pitch=62, start=0.5, end=1.0)
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            ma_utils.write_notes_to_midi([note1], path, instrument=instrument)
+            ma_utils.write_notes_to_midi([note2], path, instrument=instrument)
+            result = pretty_midi.PrettyMIDI(path)
+            self.assertEqual(len(result.instruments[0].notes), 1,
+                             "Second call must write exactly 1 note, not accumulate 2")
+            self.assertEqual(result.instruments[0].notes[0].pitch, note2.pitch)
+        finally:
+            os.unlink(path)
+
+    def test_no_instrument_uses_default_program_0(self):
+        """When no instrument is passed, the written track must use program 0."""
+        import pretty_midi, tempfile, os
+        note = self._make_note()
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            ma_utils.write_notes_to_midi([note], path)
+            result = pretty_midi.PrettyMIDI(path)
+            self.assertEqual(result.instruments[0].program, 0)
+        finally:
+            os.unlink(path)
+
+    def test_instrument_metadata_preserved_in_output(self):
+        """Program, name, and is_drum must be copied into the written track."""
+        import pretty_midi, tempfile, os
+        instrument = pretty_midi.Instrument(program=25, is_drum=False, name="Acoustic Guitar")
+        note = self._make_note()
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            ma_utils.write_notes_to_midi([note], path, instrument=instrument)
+            result = pretty_midi.PrettyMIDI(path)
+            self.assertEqual(result.instruments[0].program, 25)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()
