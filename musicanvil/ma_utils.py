@@ -222,8 +222,14 @@ drum_lines = {
 }
 
 
-def generate_scale(scale_name, tonic):
-    """Return the note names of a scale over three octaves (starting at octave 4)."""
+def generate_scale(scale_name, tonic, start_octave=4):
+    """Return the note names of a scale over three octaves starting at *start_octave*.
+
+    Parameters:
+    - scale_name: Key in ``scale_definitions`` (case-insensitive).
+    - tonic: Root note name from ``notes_in_octave`` (e.g. "C", "F#").
+    - start_octave: The octave number of the lowest root note (default 4 → C4).
+    """
     intervals = scale_definitions.get(scale_name.lower())
     if intervals is None:
         raise ValueError(f"Scale '{scale_name}' is not defined.")
@@ -234,9 +240,9 @@ def generate_scale(scale_name, tonic):
     scale_notes = []
     for octave in range(3):
         for interval in intervals:
-            semitone = tonic_index + interval + octave * 12  # Absolute semitones above C4
+            semitone = tonic_index + interval + octave * 12
             note_name = notes_in_octave[semitone % 12]
-            octave_number = 4 + semitone // 12  # Carry into the next octave when notes wrap past B
+            octave_number = start_octave + semitone // 12
             scale_notes.append(note_name + str(octave_number))
     return scale_notes
 

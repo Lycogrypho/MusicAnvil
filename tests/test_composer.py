@@ -227,6 +227,51 @@ class TestRenderPiece(unittest.TestCase):
         self.assertAlmostEqual(MusicAnvil.piece_seconds(piece), base_len * 2)
 
 
+class TestTonicOctave(unittest.TestCase):
+    """Tests for tonic_octave threading through PieceSpec → resolve_section → render."""
+
+    def test_resolve_section_inherits_piece_tonic_octave(self):
+        piece = _make_piece()
+        piece.tonic_octave = 3
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        self.assertEqual(resolved.tonic_octave, 3)
+
+    def test_resolve_section_override_wins(self):
+        piece = _make_piece()
+        piece.tonic_octave = 3
+        piece.sections["A"].tonic_octave = 5
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        self.assertEqual(resolved.tonic_octave, 5)
+
+    def test_resolve_section_none_override_inherits(self):
+        piece = _make_piece()
+        piece.tonic_octave = 2
+        piece.sections["A"].tonic_octave = None
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        self.assertEqual(resolved.tonic_octave, 2)
+
+    def test_higher_tonic_octave_produces_higher_lead_pitches(self):
+        piece_low = _make_piece()
+        piece_low.tonic_octave = 2
+        piece_high = _make_piece()
+        piece_high.tonic_octave = 6
+        midi_low = MusicAnvil.render_piece(piece_low, random.Random(42))
+        midi_high = MusicAnvil.render_piece(piece_high, random.Random(42))
+        piano_low = next(i for i in midi_low.instruments if i.name == "Piano")
+        piano_high = next(i for i in midi_high.instruments if i.name == "Piano")
+        avg_low = sum(n.pitch for n in piano_low.notes) / max(len(piano_low.notes), 1)
+        avg_high = sum(n.pitch for n in piano_high.notes) / max(len(piano_high.notes), 1)
+        self.assertGreater(avg_high, avg_low)
+
+    def test_default_piece_tonic_octave_is_4(self):
+        piece = MusicAnvil.PieceSpec()
+        self.assertEqual(piece.tonic_octave, 4)
+
+    def test_section_spec_tonic_octave_defaults_to_none(self):
+        spec = MusicAnvil.SectionSpec(name="test")
+        self.assertIsNone(spec.tonic_octave)
+
+
 class TestStructureTransformers(unittest.TestCase):
     """Tests for StructureEntry transformer application inside render_piece."""
 

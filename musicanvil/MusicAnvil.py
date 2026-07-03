@@ -78,6 +78,7 @@ class SectionSpec:
     rhythm: str | None = None
     scale: str | None = None
     tonic: str | None = None
+    tonic_octave: int | None = None
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
 
 
@@ -104,6 +105,7 @@ class PieceSpec:
     rhythm: str = "Rock"
     scale: str = "major"
     tonic: str = "C"
+    tonic_octave: int = 4
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
     structure: list[StructureEntry | str] = field(default_factory=list)
@@ -119,6 +121,7 @@ class ResolvedSection:
     rhythm: str
     scale: str
     tonic: str
+    tonic_octave: int
     roles: dict[str, RoleAssignment]
 
 
@@ -160,6 +163,7 @@ def resolve_section(section, piece):
         rhythm=section.rhythm if section.rhythm is not None else piece.rhythm,
         scale=section.scale if section.scale is not None else piece.scale,
         tonic=section.tonic if section.tonic is not None else piece.tonic,
+        tonic_octave=section.tonic_octave if section.tonic_octave is not None else piece.tonic_octave,
         roles=roles,
     )
 
@@ -181,9 +185,9 @@ def piece_seconds(piece):
     return total
 
 
-def _scale_pitches(scale, tonic):
+def _scale_pitches(scale, tonic, tonic_octave=4):
     """MIDI pitches of the scale over three octaves, ascending."""
-    names = ma_utils.generate_scale(scale, tonic)
+    names = ma_utils.generate_scale(scale, tonic, start_octave=tonic_octave)
     return [pretty_midi.note_name_to_number(name) for name in names]
 
 
@@ -280,7 +284,7 @@ def render_section(resolved, rng=None):
     beats_per_bar = resolved.signature[0]
     n_beats = resolved.bars * beats_per_bar
     length = n_beats * beat_len
-    scale_pitches = _scale_pitches(resolved.scale, resolved.tonic)
+    scale_pitches = _scale_pitches(resolved.scale, resolved.tonic, resolved.tonic_octave)
 
     tracks = {}
 

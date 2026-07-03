@@ -267,6 +267,43 @@ class TestScaleDefinitionsModes(unittest.TestCase):
         self.assertIn("A#4", notes)
 
 
+class TestGenerateScaleOctave(unittest.TestCase):
+    """Tests for the start_octave parameter added to generate_scale."""
+
+    def test_default_octave_4_starts_at_4(self):
+        notes = ma_utils.generate_scale("major", "C")
+        self.assertEqual(notes[0], "C4")
+
+    def test_start_octave_2_starts_at_2(self):
+        notes = ma_utils.generate_scale("major", "C", start_octave=2)
+        self.assertEqual(notes[0], "C2")
+
+    def test_start_octave_5_starts_at_5(self):
+        notes = ma_utils.generate_scale("major", "C", start_octave=5)
+        self.assertEqual(notes[0], "C5")
+
+    def test_octave_numbers_ascend_across_three_octaves(self):
+        notes = ma_utils.generate_scale("major", "C", start_octave=3)
+        # C major: C D E F G A B — first note octave 3, last octave 5
+        self.assertTrue(notes[0].endswith("3"))
+        self.assertTrue(notes[-1].endswith("5"))
+
+    def test_start_octave_6_pitches_higher_than_octave_4(self):
+        notes_4 = ma_utils.generate_scale("major", "C", start_octave=4)
+        notes_6 = ma_utils.generate_scale("major", "C", start_octave=6)
+        pitches_4 = [pretty_midi.note_name_to_number(n) for n in notes_4]
+        pitches_6 = [pretty_midi.note_name_to_number(n) for n in notes_6]
+        self.assertTrue(all(p6 > p4 for p4, p6 in zip(pitches_4, pitches_6)))
+
+    def test_same_note_names_just_shifted(self):
+        notes_3 = ma_utils.generate_scale("major", "G", start_octave=3)
+        notes_5 = ma_utils.generate_scale("major", "G", start_octave=5)
+        # Strip octave digit and compare note names
+        names_3 = [n[:-1] for n in notes_3]
+        names_5 = [n[:-1] for n in notes_5]
+        self.assertEqual(names_3, names_5)
+
+
 class TestBeatTransformers(unittest.TestCase):
     """Tests for tone_shift, invert, BEAT_TRANSFORMERS registry, and get_transformer."""
 
