@@ -60,7 +60,7 @@ class TestGUIDependencies(unittest.TestCase):
     """Every library symbol the GUI references must exist and be non-empty."""
 
     def setUp(self):
-        from musicanvil import composer, ma_utils
+        from musicanvil import MusicAnvil, ma_utils
 
 
 # OopCompanion:suppressRename
@@ -89,7 +89,7 @@ class TestGUIDependencies(unittest.TestCase):
 
 # OopCompanion:suppressRename
         self.ma = ma_utils
-        self.composer = composer
+        self.composer = MusicAnvil
 
     def test_notes_in_octave_exists_and_has_12_entries(self):
         self.assertEqual(len(self.ma.notes_in_octave), 12)

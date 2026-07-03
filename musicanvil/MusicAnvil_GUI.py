@@ -2,15 +2,15 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 try:
-    from musicanvil import composer, ma_utils
+    from musicanvil import MusicAnvil, ma_utils
 except ImportError:  # script-directory launch
-    import composer
+    import MusicAnvil
     import ma_utils
 
 
 # OopCompanion:suppressRename
 
-MELODIC_INSTRUMENTS = list(composer.INSTRUMENT_PROGRAMS.keys())
+MELODIC_INSTRUMENTS = list(MusicAnvil.INSTRUMENT_PROGRAMS.keys())
 NONE_CHOICE = "(none)"
 SIGNATURE_OPTIONS = ["4/4", "2/2", "2/4", "3/4", "6/8"]
 
@@ -26,14 +26,14 @@ class RoleEditor:
 
     def __init__(self, parent, defaults=None):
         defaults = defaults or {}
-        self.main_vars = {}
-        self.support_boxes = {}
-        for column, role in enumerate(composer.ROLES):
+        self.main_vars: dict[str, tk.StringVar] = {}
+        self.support_boxes: dict[str, tk.Listbox] = {}
+        for column, role in enumerate(MusicAnvil.ROLES):
             frame = tk.LabelFrame(parent, text=role)
             frame.grid(row=0, column=column, padx=5, pady=5, sticky="n")
             tk.Label(frame, text="Main:").grid(row=0, column=0, sticky="w")
             var = tk.StringVar(value=defaults.get(role, NONE_CHOICE))
-            if role == composer.ROLE_LEAD:
+            if role == MusicAnvil.ROLE_LEAD:
                 values = MELODIC_INSTRUMENTS
             else:
                 values = [NONE_CHOICE] + MELODIC_INSTRUMENTS
@@ -49,17 +49,17 @@ class RoleEditor:
 
     def get_roles(self):
         roles = {}
-        for role in composer.ROLES:
+        for role in MusicAnvil.ROLES:
             main = self.main_vars[role].get()
             main = None if main in ("", NONE_CHOICE) else main
-            supports = [MELODIC_INSTRUMENTS[i] for i in self.support_boxes[role].curselection()]
+            supports: list[str] = [MELODIC_INSTRUMENTS[i] for i in self.support_boxes[role].curselection()]
             supports = [s for s in supports if s != main]
-            roles[role] = composer.RoleAssignment(main=main, supports=supports)
+            roles[role] = MusicAnvil.RoleAssignment(main=main, supports=supports)
         return roles
 
     def set_roles(self, roles):
-        for role in composer.ROLES:
-            assignment = roles.get(role) or composer.RoleAssignment()
+        for role in MusicAnvil.ROLES:
+            assignment = roles.get(role) or MusicAnvil.RoleAssignment()
             self.main_vars[role].set(assignment.main or NONE_CHOICE)
             box = self.support_boxes[role]
             box.selection_clear(0, tk.END)
@@ -73,7 +73,7 @@ class MusicGeneratorApp:
         self.root = root
         self.root.title("MusicAnvil — Piece Builder")
 
-        self.sections = {}   # name -> composer.SectionSpec
+        self.sections = {}   # name -> MusicAnvil.SectionSpec
         self.structure = []  # ordered section names
 
         notebook = ttk.Notebook(root)
@@ -123,9 +123,9 @@ class MusicGeneratorApp:
         roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
         roles_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nw")
         self.piece_roles = RoleEditor(roles_frame, defaults={
-            composer.ROLE_LEAD: "Piano",
-            composer.ROLE_ACCOMPANIMENT: "Guitar",
-            composer.ROLE_BASS: "Bass",
+            MusicAnvil.ROLE_LEAD: "Piano",
+            MusicAnvil.ROLE_ACCOMPANIMENT: "Guitar",
+            MusicAnvil.ROLE_BASS: "Bass",
         })
 
         structure = tk.LabelFrame(self.piece_tab, text="Piece Structure")
@@ -185,7 +185,7 @@ class MusicGeneratorApp:
     def _update_total(self):
         try:
             piece = self._current_piece_spec()
-            total = composer.piece_seconds(piece) if piece.structure else 0.0
+            total = MusicAnvil.piece_seconds(piece) if piece.structure else 0.0
             self.total_label.config(text=f"Total duration: {fmt_mmss(total)}")
         except Exception:
             self.total_label.config(text="Total duration: --:--")
@@ -242,7 +242,7 @@ class MusicGeneratorApp:
 
         tk.Button(editor, text="Apply", command=self._apply_section).grid(row=9, column=0, columnspan=2, pady=10)
 
-    def _selected_library_name(self):
+    def _selected_library_name(self) -> str | None:
         selection = self.library_listbox.curselection()
         if not selection:
             return None
@@ -259,7 +259,7 @@ class MusicGeneratorApp:
         if name in self.sections:
             messagebox.showerror("Error", f"A section named '{name}' already exists.")
             return
-        self.sections[name] = composer.SectionSpec(name=name)
+        self.sections[name] = MusicAnvil.SectionSpec(name=name)
         self.library_listbox.insert(tk.END, name)
         self._refresh_section_choices()
 
@@ -308,7 +308,7 @@ class MusicGeneratorApp:
             messagebox.showerror("Error", "Select a section in the library first.")
             return
         try:
-            spec = composer.SectionSpec(name=name, bars=int(self.bars_var.get()))
+            spec = MusicAnvil.SectionSpec(name=str(name), bars=int(self.bars_var.get()))
             if spec.bars <= 0:
                 raise ValueError("Bars must be a positive number.")
             check_var, value_var = self.sec_override["tempo"]
@@ -318,7 +318,7 @@ class MusicGeneratorApp:
                     raise ValueError("Tempo must be a positive number.")
             check_var, value_var = self.sec_override["signature"]
             if check_var.get():
-                spec.signature = composer.parse_signature(value_var.get())
+                spec.signature = MusicAnvil.parse_signature(value_var.get())
             for key in ("rhythm", "scale", "tonic"):
                 check_var, value_var = self.sec_override[key]
                 if check_var.get():
@@ -339,8 +339,8 @@ class MusicGeneratorApp:
     def _update_section_duration(self, spec):
         try:
             piece = self._current_piece_spec()
-            resolved = composer.resolve_section(spec, piece)
-            seconds = composer.section_seconds(resolved.bars, resolved.tempo, resolved.signature)
+            resolved = MusicAnvil.resolve_section(spec, piece)
+            seconds = MusicAnvil.section_seconds(resolved.bars, resolved.tempo, resolved.signature)
             self.sec_duration_label.config(text=f"Duration: {fmt_mmss(seconds)}")
         except Exception:
             self.sec_duration_label.config(text="Duration: --:--")
@@ -354,9 +354,9 @@ class MusicGeneratorApp:
         tempo = int(self.tempo_var.get())
         if tempo <= 0:
             raise ValueError("Tempo must be a positive number.")
-        piece = composer.PieceSpec(
+        piece = MusicAnvil.PieceSpec(
             tempo=tempo,
-            signature=composer.parse_signature(self.signature_var.get()),
+            signature=MusicAnvil.parse_signature(self.signature_var.get()),
             rhythm=self.rhythm_var.get(),
             scale=self.scale_var.get(),
             tonic=self.tonic_var.get(),
@@ -364,7 +364,7 @@ class MusicGeneratorApp:
             sections=dict(self.sections),
             structure=list(self.structure),
         )
-        if piece.roles[composer.ROLE_LEAD].main is None:
+        if piece.roles[MusicAnvil.ROLE_LEAD].main is None:
             raise ValueError("A main Lead instrument is required.")
         return piece
 
@@ -376,9 +376,9 @@ class MusicGeneratorApp:
             filename = self.filename_var.get().strip() or "output"
             if not filename.endswith(".mid"):
                 filename += ".mid"
-            midi_data = composer.render_piece(piece)
+            midi_data = MusicAnvil.render_piece(piece)
             midi_data.write(filename)
-            total = composer.piece_seconds(piece)
+            total = MusicAnvil.piece_seconds(piece)
             messagebox.showinfo("Done", f"MIDI saved to {filename} ({fmt_mmss(total)})")
         except Exception as exc:
             messagebox.showerror("Error", str(exc))

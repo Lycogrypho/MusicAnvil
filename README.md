@@ -20,6 +20,21 @@ And it needs no Artificial Intelligence to do so...
 pip install pretty_midi
 ```
 
+## Architecture
+
+| Module | Role |
+|---|---|
+| `musicanvil.MusicAnvil` | Composition engine — `PieceSpec`, `SectionSpec`, `render_piece`, etc. |
+| `musicanvil.ma_utils` | Utility library — scales, chords, drum patterns, MIDI helpers |
+| `musicanvil.MusicAnvil_GUI` | `tkinter` interface to the composition engine |
+
+All public symbols from both `MusicAnvil` and `ma_utils` are re-exported at the package level, so you can write either:
+
+```python
+from musicanvil import PieceSpec, generate_scale          # flat import
+from musicanvil import MusicAnvil, ma_utils               # module import
+```
+
 ## GUI
 
 Launch the graphical interface:
@@ -28,23 +43,57 @@ Launch the graphical interface:
 python musicanvil/MusicAnvil_GUI.py
 ```
 
-The GUI lets you configure:
+The GUI lets you configure piece-wide defaults and build an ordered section structure:
 
 | Field | Description |
 |---|---|
 | Tempo | BPM (default 120) |
 | Signature | Time signature (4/4, 3/4, 6/8, …) |
-| Rhythm | Drum genre preset (Rock, Jazz, Metal, Bossa Nova, …) |
+| Genre (drums) | Drum pattern preset (Rock, Jazz, Metal, Bossa Nova, …) |
 | Scale | Scale type (major, blues, pentatonic, …) |
 | Tonic Note | Root note of the scale |
-| Instruments | Multi-select list of instruments to include |
-| Lead Instrument | Instrument that carries the melody |
+| Default Roles | Main + support instruments for Lead, Accompaniment, and Bass |
 | FileName | Output `.mid` file name |
-| Duration | Length of the generated piece (MM:SS) |
 
-## Library Usage
+Each section in the library can override any piece default. Sections are arranged into the piece structure via the Piece tab and generated into a single `.mid` file.
 
-Import the core module:
+## Composition Engine
+
+Import the engine and describe a piece:
+
+```python
+from musicanvil import MusicAnvil
+
+piece = MusicAnvil.PieceSpec(
+    tempo=120,
+    signature=(4, 4),
+    rhythm="Rock",
+    scale="major",
+    tonic="C",
+    roles={
+        MusicAnvil.ROLE_LEAD:          MusicAnvil.RoleAssignment(main="Piano"),
+        MusicAnvil.ROLE_ACCOMPANIMENT: MusicAnvil.RoleAssignment(main="Guitar"),
+        MusicAnvil.ROLE_BASS:          MusicAnvil.RoleAssignment(main="Bass"),
+    },
+    sections={
+        "intro":  MusicAnvil.SectionSpec(name="intro",  bars=4),
+        "verse":  MusicAnvil.SectionSpec(name="verse",  bars=8),
+        "chorus": MusicAnvil.SectionSpec(name="chorus", bars=8, tempo=130),
+    },
+    structure=["intro", "verse", "chorus", "verse", "chorus"],
+)
+
+midi_data = MusicAnvil.render_piece(piece)
+midi_data.write("song.mid")
+```
+
+Each section is rendered once and reused identically at every occurrence in the structure. Per-section fields (`tempo`, `signature`, `rhythm`, `scale`, `tonic`, `roles`) override the piece default when set.
+
+Available melodic instruments: `Piano`, `Organ`, `Guitar`, `Bass`, `Violin`, `Strings`, `Trumpet`, `Sax`, `Flute`.
+
+## Utility Library
+
+Import `ma_utils` for low-level primitives:
 
 ```python
 from musicanvil import ma_utils
