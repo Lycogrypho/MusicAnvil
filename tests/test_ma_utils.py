@@ -78,5 +78,23 @@ class TestGenerateRandomBeatBaseUnit(unittest.TestCase):
             self.assertLessEqual(note.end, beat_duration + 1e-9)
 
 
+class TestGenerateRandomBeatGuards(unittest.TestCase):
+    """P2 #3 — generate_random_beat must raise ValueError for empty available_notes."""
+
+    def test_empty_notes_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_random_beat([], tempo=120)
+
+    def test_empty_notes_error_message(self):
+        with self.assertRaises(ValueError, msg="available_notes must not be empty"):
+            ma_utils.generate_random_beat([], tempo=120)
+
+    def test_non_empty_notes_does_not_raise(self):
+        try:
+            ma_utils.generate_random_beat([60], tempo=120, beat_duration=1.0)
+        except ValueError:
+            self.fail("generate_random_beat raised ValueError with a valid notes list")
+
+
 if __name__ == "__main__":
     unittest.main()
