@@ -93,13 +93,19 @@ notes_in_octave = [
 
 # Scale definitions: scale name -> semitone intervals from the tonic.
 scale_definitions = {
-    "major": [0, 2, 4, 5, 7, 9, 11],           # Major scale intervals
-    "natural_minor": [0, 2, 3, 5, 7, 8, 10],   # Natural minor scale intervals
-    "harmonic_minor": [0, 2, 3, 5, 7, 8, 11],  # Harmonic minor scale intervals
-    "melodic_minor": [0, 2, 3, 5, 7, 9, 11],   # Melodic minor scale intervals (ascending)
-    "blues": [0, 3, 5, 6, 7, 10],              # Blues scale intervals
-    "pentatonic_major": [0, 2, 4, 7, 9],       # Major pentatonic scale intervals
-    "pentatonic_minor": [0, 3, 5, 7, 10],      # Minor pentatonic scale intervals
+    "major": [0, 2, 4, 5, 7, 9, 11],              # Major scale intervals
+    "natural_minor": [0, 2, 3, 5, 7, 8, 10],      # Natural minor scale intervals
+    "harmonic_minor": [0, 2, 3, 5, 7, 8, 11],     # Harmonic minor scale intervals
+    "melodic_minor": [0, 2, 3, 5, 7, 9, 11],      # Melodic minor scale intervals (ascending)
+    "dorian": [0, 2, 3, 5, 7, 9, 10],             # Dorian mode intervals
+    "phrygian": [0, 1, 3, 5, 7, 8, 10],           # Phrygian mode intervals
+    "lydian": [0, 2, 4, 6, 7, 9, 11],             # Lydian mode intervals
+    "mixolydian": [0, 2, 4, 5, 7, 9, 10],         # Mixolydian mode intervals
+    "locrian": [0, 1, 3, 5, 6, 8, 10],            # Locrian mode intervals
+    "blues": [0, 3, 5, 6, 7, 10],                 # Blues scale intervals
+    "pentatonic_major": [0, 2, 4, 7, 9],          # Major pentatonic scale intervals
+    "pentatonic_minor": [0, 3, 5, 7, 10],         # Minor pentatonic scale intervals
+    "chromatic": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],  # Chromatic scale intervals
 }
 
 # Chord definitions: chord type -> semitone intervals from the tonic.

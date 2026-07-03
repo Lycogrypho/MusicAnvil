@@ -193,5 +193,77 @@ class TestWriteNotesToMidi(unittest.TestCase):
             os.unlink(path)
 
 
+class TestScaleDefinitionsModes(unittest.TestCase):
+    """P3 #9 — verify newly added Western modes are present and have correct intervals."""
+
+    def _intervals(self, name):
+        return ma_utils.scale_definitions[name]
+
+    # -- presence ----------------------------------------------------------
+
+    def test_dorian_present(self):
+        self.assertIn("dorian", ma_utils.scale_definitions)
+
+    def test_phrygian_present(self):
+        self.assertIn("phrygian", ma_utils.scale_definitions)
+
+    def test_lydian_present(self):
+        self.assertIn("lydian", ma_utils.scale_definitions)
+
+    def test_mixolydian_present(self):
+        self.assertIn("mixolydian", ma_utils.scale_definitions)
+
+    def test_locrian_present(self):
+        self.assertIn("locrian", ma_utils.scale_definitions)
+
+    def test_chromatic_present(self):
+        self.assertIn("chromatic", ma_utils.scale_definitions)
+
+    # -- correct intervals -------------------------------------------------
+
+    def test_dorian_intervals(self):
+        self.assertEqual(self._intervals("dorian"), [0, 2, 3, 5, 7, 9, 10])
+
+    def test_phrygian_intervals(self):
+        self.assertEqual(self._intervals("phrygian"), [0, 1, 3, 5, 7, 8, 10])
+
+    def test_lydian_intervals(self):
+        self.assertEqual(self._intervals("lydian"), [0, 2, 4, 6, 7, 9, 11])
+
+    def test_mixolydian_intervals(self):
+        self.assertEqual(self._intervals("mixolydian"), [0, 2, 4, 5, 7, 9, 10])
+
+    def test_locrian_intervals(self):
+        self.assertEqual(self._intervals("locrian"), [0, 1, 3, 5, 6, 8, 10])
+
+    def test_chromatic_has_all_12_semitones(self):
+        self.assertEqual(self._intervals("chromatic"), list(range(12)))
+
+    # -- generate_scale integration ----------------------------------------
+
+    def test_generate_scale_dorian_c(self):
+        notes = ma_utils.generate_scale("dorian", "C")
+        # C dorian over 3 octaves: root notes should include C, D, Eb, F, G, A, Bb
+        self.assertIn("C4", notes)
+        self.assertIn("D4", notes)
+        self.assertIn("D#4", notes)  # Eb = D# in sharp-only convention
+        self.assertIn("A#4", notes)  # Bb = A# in sharp-only convention
+
+    def test_generate_scale_chromatic_has_12_unique_pitch_classes(self):
+        notes = ma_utils.generate_scale("chromatic", "C")
+        pitch_classes = {n[:-1] for n in notes}  # strip octave number
+        self.assertEqual(len(pitch_classes), 12)
+
+    def test_generate_scale_lydian_c_contains_tritone(self):
+        # Lydian raises the 4th by a semitone → F# in C lydian
+        notes = ma_utils.generate_scale("lydian", "C")
+        self.assertIn("F#4", notes)
+
+    def test_generate_scale_mixolydian_c_has_flat_seventh(self):
+        # Mixolydian lowers the 7th → Bb (A#) in C mixolydian
+        notes = ma_utils.generate_scale("mixolydian", "C")
+        self.assertIn("A#4", notes)
+
+
 if __name__ == "__main__":
     unittest.main()
