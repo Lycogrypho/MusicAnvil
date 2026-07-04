@@ -15,6 +15,7 @@ NONE_CHOICE = "(none)"
 SIGNATURE_OPTIONS = ["4/4", "2/2", "2/4", "3/4", "6/8"]
 OCTAVE_OPTIONS = ["2", "3", "4", "5", "6"]
 TRANSFORMER_OPTIONS = [NONE_CHOICE] + sorted(ma_utils.BEAT_TRANSFORMERS)
+BEAT_MODE_OPTIONS = list(ma_utils.BEAT_MODES.keys())  # display labels → numeric mode
 
 
 def _entry_label(entry):
@@ -135,9 +136,14 @@ class MusicGeneratorApp:
         ttk.Combobox(tonic_frame, textvariable=self.tonic_octave_var, values=OCTAVE_OPTIONS,
                      state="readonly", width=3).pack(side="left", padx=(4, 0))
 
-        tk.Label(defaults, text="FileName:").grid(row=5, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="Beat Mode:").grid(row=5, column=0, sticky="w", padx=5, pady=3)
+        self.beat_mode_var = tk.StringVar(value=BEAT_MODE_OPTIONS[0])
+        ttk.Combobox(defaults, textvariable=self.beat_mode_var, values=BEAT_MODE_OPTIONS,
+                     state="readonly", width=18).grid(row=5, column=1, padx=5, pady=3)
+
+        tk.Label(defaults, text="FileName:").grid(row=6, column=0, sticky="w", padx=5, pady=3)
         self.filename_var = tk.StringVar(value="output")
-        tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=5, column=1, padx=5, pady=3)
+        tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=6, column=1, padx=5, pady=3)
 
         roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
         roles_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nw")
@@ -276,18 +282,19 @@ class MusicGeneratorApp:
         override_row(4, "scale", "Override Scale", list(ma_utils.scale_definitions.keys()), 14)
         override_row(5, "tonic", "Override Tonic Note", ma_utils.notes_in_octave, 6)
         override_row(6, "tonic_octave", "Override Tonic Octave", OCTAVE_OPTIONS, 4)
+        override_row(7, "beat_mode", "Override Beat Mode", BEAT_MODE_OPTIONS, 18)
 
         self.sec_roles_override_var = tk.BooleanVar(value=False)
         tk.Checkbutton(editor, text="Override Roles", variable=self.sec_roles_override_var).grid(
-            row=7, column=0, sticky="w", padx=5, pady=3)
+            row=8, column=0, sticky="w", padx=5, pady=3)
         roles_holder = tk.Frame(editor)
-        roles_holder.grid(row=8, column=0, columnspan=2, padx=5, pady=3)
+        roles_holder.grid(row=9, column=0, columnspan=2, padx=5, pady=3)
         self.sec_roles = RoleEditor(roles_holder)
 
         self.sec_duration_label = tk.Label(editor, text="Duration: --:--")
-        self.sec_duration_label.grid(row=9, column=0, columnspan=2, pady=5)
+        self.sec_duration_label.grid(row=10, column=0, columnspan=2, pady=5)
 
-        tk.Button(editor, text="Apply", command=self._apply_section).grid(row=10, column=0, columnspan=2, pady=10)
+        tk.Button(editor, text="Apply", command=self._apply_section).grid(row=11, column=0, columnspan=2, pady=10)
 
     def _selected_library_name(self) -> str | None:
         selection = self.library_listbox.curselection()
@@ -334,6 +341,11 @@ class MusicGeneratorApp:
             return
         spec = self.sections[name]
         self.bars_var.set(str(spec.bars))
+        # Reverse-map numeric beat_mode back to its display label.
+        beat_mode_label = next(
+            (label for label, num in ma_utils.BEAT_MODES.items() if num == spec.beat_mode),
+            None,
+        )
         loaders = {
             "tempo": None if spec.tempo is None else str(spec.tempo),
             "signature": None if spec.signature is None else f"{spec.signature[0]}/{spec.signature[1]}",
@@ -341,6 +353,7 @@ class MusicGeneratorApp:
             "scale": spec.scale,
             "tonic": spec.tonic,
             "tonic_octave": None if spec.tonic_octave is None else str(spec.tonic_octave),
+            "beat_mode": beat_mode_label,
         }
         for key, value in loaders.items():
             check_var, value_var = self.sec_override[key]
@@ -377,6 +390,9 @@ class MusicGeneratorApp:
             check_var, value_var = self.sec_override["tonic_octave"]
             if check_var.get():
                 spec.tonic_octave = int(value_var.get())
+            check_var, value_var = self.sec_override["beat_mode"]
+            if check_var.get():
+                spec.beat_mode = ma_utils.BEAT_MODES[value_var.get()]
             if self.sec_roles_override_var.get():
                 spec.roles = self.sec_roles.get_roles()
         except ValueError as exc:
@@ -412,6 +428,7 @@ class MusicGeneratorApp:
             scale=self.scale_var.get(),
             tonic=self.tonic_var.get(),
             tonic_octave=int(self.tonic_octave_var.get()),
+            beat_mode=ma_utils.BEAT_MODES[self.beat_mode_var.get()],
             roles=self.piece_roles.get_roles(),
             sections=dict(self.sections),
             structure=list(self.structure),

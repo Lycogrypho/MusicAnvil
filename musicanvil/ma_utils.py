@@ -259,18 +259,50 @@ def generate_chord_notes(note_name, chord_type):
     return [notes_in_octave[(tonic_index + interval) % 12] for interval in intervals]
 
 
-def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_duration=4):
+# Beat generation mode constants.
+BEAT_MODE_FIXED_16TH = 1   # Fixed 16th-note grid: rich sub-beat variety regardless of signature
+BEAT_MODE_HALF_DENOM = 2   # Half the denominator unit: sub-beat variety that respects the signature
+
+# Human-readable labels for GUI dropdowns, keyed by display string → mode number.
+BEAT_MODES = {
+    "1 — Fixed 16th-note": BEAT_MODE_FIXED_16TH,
+    "2 — Half-beat":       BEAT_MODE_HALF_DENOM,
+}
+
+
+def _beat_sub_unit(tempo, time_signature, mode):
+    """Return (sub_unit_seconds, max_multiplier) for the requested beat mode.
+
+    Mode 1: base = 16th note (quarter / 4). Multipliers 1-8 give 16th … half note.
+    Mode 2: base = half the denominator unit.  Multipliers 1-8 give 8th … double-whole.
+    """
+    quarter = 60.0 / tempo
+    denom_unit = quarter * 4 / time_signature[1]
+    if mode == BEAT_MODE_FIXED_16TH:
+        return quarter / 4, 8
+    if mode == BEAT_MODE_HALF_DENOM:
+        return denom_unit / 2, 8
+    raise ValueError(
+        f"Unknown beat generation mode {mode!r}. "
+        f"Supported: {BEAT_MODE_FIXED_16TH} (fixed 16th), {BEAT_MODE_HALF_DENOM} (half-denominator)."
+    )
+
+
+def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_duration=4, mode=BEAT_MODE_FIXED_16TH):
     """Generate a random beat as a list of pretty_midi.Note objects.
 
     Notes and rests are placed sequentially (80% note / 20% rest), each lasting an
-    integer multiple (1-4) of the base unit. Generation stops once the accumulated
+    integer multiple of the mode's base unit. Generation stops once the accumulated
     time reaches ``beat_duration``, which is interpreted in **seconds**.
 
     Parameters:
     - available_notes: List of MIDI note numbers (e.g. [60, 62, 64, 65, 67, 69, 71, 72]).
     - tempo: Tempo in beats per minute (BPM).
-    - time_signature: (numerator, denominator); the denominator sets the base note unit.
+    - time_signature: (numerator, denominator); used by mode 2 to derive the base unit.
     - beat_duration: Total length of the generated beat, in seconds.
+    - mode: Beat generation mode (``BEAT_MODE_FIXED_16TH`` or ``BEAT_MODE_HALF_DENOM``).
+      Mode 1 uses a fixed 16th-note grid for maximum rhythmic variety.
+      Mode 2 halves the denominator unit, preserving the time-signature character.
 
     Returns a list of pretty_midi.Note objects.
     """
@@ -278,13 +310,13 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
         raise ValueError("available_notes must not be empty.")
     if tempo <= 0:
         raise ValueError(f"tempo must be a positive number of BPM, got {tempo}.")
-    quarter_note_duration = 60.0 / tempo                           # Duration of a quarter note in seconds
-    base_duration = quarter_note_duration * 4 / time_signature[1]  # Base unit from the time signature
+
+    base_duration, max_mult = _beat_sub_unit(tempo, time_signature, mode)
 
     total_duration = 0
     beat_notes = []
     while total_duration < beat_duration:
-        duration = random.randint(1, 4) * base_duration  # 1-4 base units
+        duration = random.randint(1, max_mult) * base_duration
         if random.random() < 0.8:  # 80% chance of a note, 20% chance of a rest
             note_number = random.choice(available_notes)
             beat_notes.append(pretty_midi.Note(velocity=100, pitch=note_number,

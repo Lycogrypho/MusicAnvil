@@ -79,6 +79,7 @@ class SectionSpec:
     scale: str | None = None
     tonic: str | None = None
     tonic_octave: int | None = None
+    beat_mode: int | None = None
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
 
 
@@ -106,6 +107,7 @@ class PieceSpec:
     scale: str = "major"
     tonic: str = "C"
     tonic_octave: int = 4
+    beat_mode: int = ma_utils.BEAT_MODE_FIXED_16TH
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
     structure: list[StructureEntry | str] = field(default_factory=list)
@@ -122,6 +124,7 @@ class ResolvedSection:
     scale: str
     tonic: str
     tonic_octave: int
+    beat_mode: int
     roles: dict[str, RoleAssignment]
 
 
@@ -164,6 +167,7 @@ def resolve_section(section, piece):
         scale=section.scale if section.scale is not None else piece.scale,
         tonic=section.tonic if section.tonic is not None else piece.tonic,
         tonic_octave=section.tonic_octave if section.tonic_octave is not None else piece.tonic_octave,
+        beat_mode=section.beat_mode if section.beat_mode is not None else piece.beat_mode,
         roles=roles,
     )
 
@@ -191,17 +195,37 @@ def _scale_pitches(scale, tonic, tonic_octave=4):
     return [pretty_midi.note_name_to_number(name) for name in names]
 
 
-def generate_lead_line(scale_pitches, n_beats, beat_len, rng):
-    """Random melody within the scale: 80% note / 20% rest, 1-2 beats per slot."""
+def generate_lead_line(scale_pitches, n_beats, beat_len, rng,
+                       mode=ma_utils.BEAT_MODE_FIXED_16TH, tempo=120):
+    """Random melody within the scale: 80% note / 20% rest.
+
+    ``mode`` controls the sub-beat grid (see ``ma_utils.BEAT_MODE_*`` constants):
+    - Mode 1 (BEAT_MODE_FIXED_16TH): true 16th-note base — maximum rhythmic variety.
+    - Mode 2 (BEAT_MODE_HALF_DENOM): half-beat base — sub-beat variety that tracks the signature.
+
+    ``tempo`` is only needed for mode 1 to derive the absolute 16th-note duration.
+    """
+    if mode == ma_utils.BEAT_MODE_FIXED_16TH:
+        sub_unit = 60.0 / tempo / 4   # true 16th note regardless of time signature
+    elif mode == ma_utils.BEAT_MODE_HALF_DENOM:
+        sub_unit = beat_len / 2        # half the denominator beat unit
+    else:
+        raise ValueError(
+            f"Unknown beat_mode {mode!r}. "
+            f"Supported: {ma_utils.BEAT_MODE_FIXED_16TH} (fixed 16th), "
+            f"{ma_utils.BEAT_MODE_HALF_DENOM} (half-denominator)."
+        )
+
+    total_sub = round(n_beats * beat_len / sub_unit)
     notes = []
-    beat = 0
-    while beat < n_beats:
-        length = min(rng.randint(1, 2), n_beats - beat)
+    pos = 0
+    while pos < total_sub:
+        length = min(rng.randint(1, 8), total_sub - pos)
         if rng.random() < 0.8:
             pitch = rng.choice(scale_pitches)
             notes.append(pretty_midi.Note(velocity=VELOCITY_LEAD, pitch=pitch,
-                                          start=beat * beat_len, end=(beat + length) * beat_len))
-        beat += length
+                                          start=pos * sub_unit, end=(pos + length) * sub_unit))
+        pos += length
     return notes
 
 
@@ -315,7 +339,8 @@ def render_section(resolved, rng=None):
 
     # c) lead line
     lead_role = resolved.roles[ROLE_LEAD]
-    lead_line = generate_lead_line(scale_pitches, n_beats, beat_len, rng) if lead_role.main else []
+    lead_line = generate_lead_line(scale_pitches, n_beats, beat_len, rng,
+                                   mode=resolved.beat_mode, tempo=resolved.tempo) if lead_role.main else []
     add(lead_role.main, lead_line)
     for support in lead_role.supports:
         add(support, derive_support_line(lead_line, beat_len, beats_per_bar, "even-beats"))
