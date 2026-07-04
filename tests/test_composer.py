@@ -358,5 +358,68 @@ class TestStructureTransformers(unittest.TestCase):
             MusicAnvil.render_piece(piece, random.Random(1))
 
 
+class TestDrumPatternTiling(unittest.TestCase):
+    """Drum patterns must repeat at the bar length, not at max note-end time.
+
+    Regression for: render_section used max(entry[3] for entry in adapted) as
+    pattern_len. For Waltz the last drum note ends at beat 2.5, but the bar is
+    3 beats, causing the pattern to tile 0.5 beats too early every bar.
+    """
+
+    def _render_drums(self, rhythm, signature, bars=2, tempo=120):
+        piece = MusicAnvil.PieceSpec(
+            tempo=tempo,
+            signature=signature,
+            rhythm=rhythm,
+            scale="major",
+            tonic="C",
+            roles={
+                MusicAnvil.ROLE_LEAD: MusicAnvil.RoleAssignment(main="Piano"),
+                MusicAnvil.ROLE_ACCOMPANIMENT: MusicAnvil.RoleAssignment(),
+                MusicAnvil.ROLE_BASS: MusicAnvil.RoleAssignment(),
+            },
+        )
+        section = MusicAnvil.SectionSpec(name="A", bars=bars)
+        resolved = MusicAnvil.resolve_section(section, piece)
+        tracks, _ = MusicAnvil.render_section(resolved, random.Random(1))
+        return tracks[MusicAnvil.DRUM_TRACK]
+
+    def _bass_drum_starts_at_bar_boundaries(self, drum_notes, bar_len):
+        """Sorted start times of bass drum notes that land exactly on a bar boundary."""
+        bass_pitch = ma_utils.drum_pitches["Bass Drum"]
+        return sorted(
+            round(n.start, 6)
+            for n in drum_notes
+            if n.pitch == bass_pitch and round(n.start % bar_len, 9) < 1e-6
+        )
+
+    def test_waltz_pattern_tiles_at_bar_boundary(self):
+        """Waltz: last note ends at beat 2.5, bar = 3 beats → tile period is 1.5 s."""
+        beat_len = MusicAnvil.beat_seconds(120, 4)   # 0.5 s
+        bar_len = 3 * beat_len                         # 1.5 s
+        drum_notes = self._render_drums("Waltz", (3, 4))
+        starts = self._bass_drum_starts_at_bar_boundaries(drum_notes, bar_len)
+        self.assertEqual(starts, [0.0, round(bar_len, 6)],
+                         f"Expected bass drum at bar starts [0.0, {bar_len}], got {starts}")
+
+    def test_bossa_nova_pattern_tiles_at_bar_boundary(self):
+        """Bossa Nova: last note ends at beat 3, bar = 4 beats → tile period is 2.0 s."""
+        beat_len = MusicAnvil.beat_seconds(120, 4)   # 0.5 s
+        bar_len = 4 * beat_len                         # 2.0 s
+        drum_notes = self._render_drums("Bossa Nova", (4, 4))
+        starts = self._bass_drum_starts_at_bar_boundaries(drum_notes, bar_len)
+        self.assertEqual(starts, [0.0, round(bar_len, 6)],
+                         f"Expected bass drum at bar starts [0.0, {bar_len}], got {starts}")
+
+    def test_all_drum_notes_within_section_length(self):
+        """Every drum note — including tiled repetitions — must end within the section."""
+        beat_len = MusicAnvil.beat_seconds(120, 4)
+        section_len = 2 * 3 * beat_len  # 2 bars of 3/4 at 120 BPM
+        drum_notes = self._render_drums("Waltz", (3, 4))
+        for note in drum_notes:
+            self.assertLessEqual(note.end, section_len + 1e-9,
+                                 f"Drum note ends at {note.end}, beyond section length {section_len}")
+
+
 if __name__ == "__main__":
     unittest.main()

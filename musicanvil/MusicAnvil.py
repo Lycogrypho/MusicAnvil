@@ -329,7 +329,7 @@ def render_section(resolved, rng=None):
     drum_notes = []
     if drum_line:
         adapted = ma_utils.adapt_drum_line(drum_line, resolved.tempo)
-        pattern_len = max(entry[3] for entry in adapted)
+        pattern_len = beats_per_bar * beat_len  # bar length, not max note-end time
         t = 0.0
         while t < length - 1e-9:
             for velocity, pitch, start, end in adapted:
