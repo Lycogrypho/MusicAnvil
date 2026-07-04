@@ -446,5 +446,80 @@ class TestBeatTransformers(unittest.TestCase):
         self.assertEqual(result[1].pitch, 53)  # 2*60-67
 
 
+class TestGenerateScaleTonicB(unittest.TestCase):
+    """P3 #6 — generate_scale edge case: tonic=B (last semitone, octave boundary immediately)."""
+
+    def test_b_major_first_note_is_B4(self):
+        notes = ma_utils.generate_scale("major", "B")
+        self.assertEqual(notes[0], "B4")
+
+    def test_b_major_second_note_crosses_into_octave_5(self):
+        # B is semitone index 11; interval 2 → semitone 13 → C#, octave bump to 5
+        notes = ma_utils.generate_scale("major", "B")
+        self.assertEqual(notes[1], "C#5")
+
+    def test_b_major_total_note_count(self):
+        notes = ma_utils.generate_scale("major", "B")
+        self.assertEqual(len(notes), 21)  # 7 notes × 3 octaves
+
+    def test_b_major_pitches_strictly_ascending(self):
+        notes = ma_utils.generate_scale("major", "B")
+        pitches = [pretty_midi.note_name_to_number(n) for n in notes]
+        self.assertEqual(pitches, sorted(pitches))
+
+    def test_b_natural_minor_starts_at_B4_then_C_sharp_5(self):
+        # natural_minor intervals [0,2,3,...]: interval 2 from B → same octave crossing
+        notes = ma_utils.generate_scale("natural_minor", "B")
+        self.assertEqual(notes[0], "B4")
+        self.assertEqual(notes[1], "C#5")
+
+
+class TestGenerateChordNotes(unittest.TestCase):
+    """P3 #6 — generate_chord_notes coverage including tonic=B wrap-around edge case."""
+
+    def test_c_major_chord(self):
+        self.assertEqual(ma_utils.generate_chord_notes("C", "major"), ["C", "E", "G"])
+
+    def test_a_minor_chord(self):
+        self.assertEqual(ma_utils.generate_chord_notes("A", "minor"), ["A", "C", "E"])
+
+    def test_b_major_chord_wraps_correctly(self):
+        # B(11)+4=15%12=3→D#, B(11)+7=18%12=6→F#
+        self.assertEqual(ma_utils.generate_chord_notes("B", "major"), ["B", "D#", "F#"])
+
+    def test_invalid_chord_type_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_chord_notes("C", "nonexistent_chord")
+
+    def test_invalid_note_name_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_chord_notes("H", "major")
+
+
+class TestAdaptDrumLineVelocityScaling(unittest.TestCase):
+    """P3 #6 — adapt_drum_line edge case: velocity_scaling_factor=0 (all velocities → 0)."""
+
+    DRUM_LINE = [[100, 35, 0, 1], [80, 38, 1, 2], [120, 42, 2, 3]]
+
+    def test_zero_scaling_zeros_all_velocities(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=0)
+        for entry in result:
+            self.assertEqual(entry[0], 0)
+
+    def test_zero_scaling_preserves_note_count(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=0)
+        self.assertEqual(len(result), len(self.DRUM_LINE))
+
+    def test_zero_scaling_preserves_timing(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=0)
+        quarter = 60.0 / 120
+        self.assertAlmostEqual(result[0][2], 0.0)
+        self.assertAlmostEqual(result[0][3], quarter)
+
+    def test_unit_scaling_preserves_velocities(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=1.0)
+        self.assertEqual([e[0] for e in result], [100, 80, 120])
+
+
 if __name__ == "__main__":
     unittest.main()

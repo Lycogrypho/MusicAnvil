@@ -13,6 +13,7 @@ except ImportError:  # script-directory launch
 MELODIC_INSTRUMENTS = list(MusicAnvil.INSTRUMENT_PROGRAMS.keys())
 NONE_CHOICE = "(none)"
 SIGNATURE_OPTIONS = ["4/4", "2/2", "2/4", "3/4", "6/8"]
+OCTAVE_OPTIONS = ["2", "3", "4", "5", "6"]
 TRANSFORMER_OPTIONS = [NONE_CHOICE] + sorted(ma_utils.BEAT_TRANSFORMERS)
 
 
@@ -125,9 +126,14 @@ class MusicGeneratorApp:
                      state="readonly", width=14).grid(row=3, column=1, padx=5, pady=3)
 
         tk.Label(defaults, text="Tonic Note:").grid(row=4, column=0, sticky="w", padx=5, pady=3)
+        tonic_frame = tk.Frame(defaults)
+        tonic_frame.grid(row=4, column=1, padx=5, pady=3, sticky="w")
         self.tonic_var = tk.StringVar(value=ma_utils.notes_in_octave[0])
-        ttk.Combobox(defaults, textvariable=self.tonic_var, values=ma_utils.notes_in_octave,
-                     state="readonly", width=6).grid(row=4, column=1, padx=5, pady=3)
+        ttk.Combobox(tonic_frame, textvariable=self.tonic_var, values=ma_utils.notes_in_octave,
+                     state="readonly", width=4).pack(side="left")
+        self.tonic_octave_var = tk.StringVar(value="4")
+        ttk.Combobox(tonic_frame, textvariable=self.tonic_octave_var, values=OCTAVE_OPTIONS,
+                     state="readonly", width=3).pack(side="left", padx=(4, 0))
 
         tk.Label(defaults, text="FileName:").grid(row=5, column=0, sticky="w", padx=5, pady=3)
         self.filename_var = tk.StringVar(value="output")
@@ -269,18 +275,19 @@ class MusicGeneratorApp:
         override_row(3, "rhythm", "Override Genre (drums)", list(ma_utils.drum_lines.keys()), 14)
         override_row(4, "scale", "Override Scale", list(ma_utils.scale_definitions.keys()), 14)
         override_row(5, "tonic", "Override Tonic Note", ma_utils.notes_in_octave, 6)
+        override_row(6, "tonic_octave", "Override Tonic Octave", OCTAVE_OPTIONS, 4)
 
         self.sec_roles_override_var = tk.BooleanVar(value=False)
         tk.Checkbutton(editor, text="Override Roles", variable=self.sec_roles_override_var).grid(
-            row=6, column=0, sticky="w", padx=5, pady=3)
+            row=7, column=0, sticky="w", padx=5, pady=3)
         roles_holder = tk.Frame(editor)
-        roles_holder.grid(row=7, column=0, columnspan=2, padx=5, pady=3)
+        roles_holder.grid(row=8, column=0, columnspan=2, padx=5, pady=3)
         self.sec_roles = RoleEditor(roles_holder)
 
         self.sec_duration_label = tk.Label(editor, text="Duration: --:--")
-        self.sec_duration_label.grid(row=8, column=0, columnspan=2, pady=5)
+        self.sec_duration_label.grid(row=9, column=0, columnspan=2, pady=5)
 
-        tk.Button(editor, text="Apply", command=self._apply_section).grid(row=9, column=0, columnspan=2, pady=10)
+        tk.Button(editor, text="Apply", command=self._apply_section).grid(row=10, column=0, columnspan=2, pady=10)
 
     def _selected_library_name(self) -> str | None:
         selection = self.library_listbox.curselection()
@@ -333,6 +340,7 @@ class MusicGeneratorApp:
             "rhythm": spec.rhythm,
             "scale": spec.scale,
             "tonic": spec.tonic,
+            "tonic_octave": None if spec.tonic_octave is None else str(spec.tonic_octave),
         }
         for key, value in loaders.items():
             check_var, value_var = self.sec_override[key]
@@ -366,6 +374,9 @@ class MusicGeneratorApp:
                     if not value:
                         raise ValueError(f"Pick a value for the overridden {key}.")
                     setattr(spec, key, value)
+            check_var, value_var = self.sec_override["tonic_octave"]
+            if check_var.get():
+                spec.tonic_octave = int(value_var.get())
             if self.sec_roles_override_var.get():
                 spec.roles = self.sec_roles.get_roles()
         except ValueError as exc:
@@ -400,6 +411,7 @@ class MusicGeneratorApp:
             rhythm=self.rhythm_var.get(),
             scale=self.scale_var.get(),
             tonic=self.tonic_var.get(),
+            tonic_octave=int(self.tonic_octave_var.get()),
             roles=self.piece_roles.get_roles(),
             sections=dict(self.sections),
             structure=list(self.structure),
