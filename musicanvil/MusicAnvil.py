@@ -81,6 +81,13 @@ class SectionSpec:
     tonic_octave: int | None = None
     beat_mode: int | None = None
     drums_enabled: list[str] | None = None
+    # Articulation overrides (None = inherit piece default)
+    lead_rest_prob: float | None = None
+    lead_sustain: float | None = None
+    lead_velocity_jitter: int | None = None
+    lead_step_bias: float | None = None
+    bass_gate: float | None = None
+    chord_gate: float | None = None
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
 
 
@@ -110,6 +117,13 @@ class PieceSpec:
     tonic_octave: int = 4
     beat_mode: int = ma_utils.BEAT_MODE_FIXED_16TH
     drums_enabled: list[str] | None = None
+    # Articulation defaults
+    lead_rest_prob: float = 0.08       # probability of rest (vs note) per sub-unit slot
+    lead_sustain: float = 0.95         # note end = start + length * sub_unit * sustain
+    lead_velocity_jitter: int = 12     # max ±offset applied to VELOCITY_LEAD per note
+    lead_step_bias: float = 0.70       # probability of choosing ±2 scale degrees from prev
+    bass_gate: float = 0.90            # bass note length as fraction of beat_len
+    chord_gate: float = 0.85           # chord note length as fraction of beat_len
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
     structure: list[StructureEntry | str] = field(default_factory=list)
@@ -128,6 +142,12 @@ class ResolvedSection:
     tonic_octave: int
     beat_mode: int
     drums_enabled: list[str] | None
+    lead_rest_prob: float
+    lead_sustain: float
+    lead_velocity_jitter: int
+    lead_step_bias: float
+    bass_gate: float
+    chord_gate: float
     roles: dict[str, RoleAssignment]
 
 
@@ -161,17 +181,26 @@ def resolve_section(section, piece):
     for role in ROLES:
         override = section.roles.get(role)
         roles[role] = override if override is not None else piece.roles.get(role, RoleAssignment())
+    def _inh(sec_val, piece_val):
+        return sec_val if sec_val is not None else piece_val
+
     return ResolvedSection(
         name=section.name,
         bars=section.bars,
-        tempo=section.tempo if section.tempo is not None else piece.tempo,
-        signature=section.signature if section.signature is not None else piece.signature,
-        rhythm=section.rhythm if section.rhythm is not None else piece.rhythm,
-        scale=section.scale if section.scale is not None else piece.scale,
-        tonic=section.tonic if section.tonic is not None else piece.tonic,
-        tonic_octave=section.tonic_octave if section.tonic_octave is not None else piece.tonic_octave,
-        beat_mode=section.beat_mode if section.beat_mode is not None else piece.beat_mode,
-        drums_enabled=section.drums_enabled if section.drums_enabled is not None else piece.drums_enabled,
+        tempo=_inh(section.tempo, piece.tempo),
+        signature=_inh(section.signature, piece.signature),
+        rhythm=_inh(section.rhythm, piece.rhythm),
+        scale=_inh(section.scale, piece.scale),
+        tonic=_inh(section.tonic, piece.tonic),
+        tonic_octave=_inh(section.tonic_octave, piece.tonic_octave),
+        beat_mode=_inh(section.beat_mode, piece.beat_mode),
+        drums_enabled=_inh(section.drums_enabled, piece.drums_enabled),
+        lead_rest_prob=_inh(section.lead_rest_prob, piece.lead_rest_prob),
+        lead_sustain=_inh(section.lead_sustain, piece.lead_sustain),
+        lead_velocity_jitter=_inh(section.lead_velocity_jitter, piece.lead_velocity_jitter),
+        lead_step_bias=_inh(section.lead_step_bias, piece.lead_step_bias),
+        bass_gate=_inh(section.bass_gate, piece.bass_gate),
+        chord_gate=_inh(section.chord_gate, piece.chord_gate),
         roles=roles,
     )
 
@@ -200,19 +229,21 @@ def _scale_pitches(scale, tonic, tonic_octave=4):
 
 
 def generate_lead_line(scale_pitches, n_beats, beat_len, rng,
-                       mode=ma_utils.BEAT_MODE_FIXED_16TH, tempo=120):
-    """Random melody within the scale: 80% note / 20% rest.
+                       mode=ma_utils.BEAT_MODE_FIXED_16TH, tempo=120,
+                       rest_prob=0.08, sustain=0.95, velocity_jitter=12,
+                       step_bias=0.70):
+    """Random melody within the scale with articulation controls.
 
-    ``mode`` controls the sub-beat grid (see ``ma_utils.BEAT_MODE_*`` constants):
-    - Mode 1 (BEAT_MODE_FIXED_16TH): true 16th-note base — maximum rhythmic variety.
-    - Mode 2 (BEAT_MODE_HALF_DENOM): half-beat base — sub-beat variety that tracks the signature.
-
-    ``tempo`` is only needed for mode 1 to derive the absolute 16th-note duration.
+    ``mode`` / ``tempo`` set the sub-beat grid (see ``ma_utils.BEAT_MODE_*``).
+    ``rest_prob``: probability of a rest per grid slot (0 = no rests, 1 = all rests).
+    ``sustain``: note duration as a fraction of its grid span (0.95 = 5 % gap before next).
+    ``velocity_jitter``: max ±offset applied to VELOCITY_LEAD each note.
+    ``step_bias``: probability of choosing within ±2 scale degrees of the previous pitch.
     """
     if mode == ma_utils.BEAT_MODE_FIXED_16TH:
-        sub_unit = 60.0 / tempo / 4   # true 16th note regardless of time signature
+        sub_unit = 60.0 / tempo / 4
     elif mode == ma_utils.BEAT_MODE_HALF_DENOM:
-        sub_unit = beat_len / 2        # half the denominator beat unit
+        sub_unit = beat_len / 2
     else:
         raise ValueError(
             f"Unknown beat_mode {mode!r}. "
@@ -221,21 +252,35 @@ def generate_lead_line(scale_pitches, n_beats, beat_len, rng,
         )
 
     total_sub = round(n_beats * beat_len / sub_unit)
+    section_end = total_sub * sub_unit
     notes = []
     pos = 0
+    prev_idx = None
     while pos < total_sub:
         length = min(rng.randint(1, 8), total_sub - pos)
-        if rng.random() < 0.8:
-            pitch = rng.choice(scale_pitches)
-            notes.append(pretty_midi.Note(velocity=VELOCITY_LEAD, pitch=pitch,
-                                          start=pos * sub_unit, end=(pos + length) * sub_unit))
+        if rng.random() >= rest_prob:
+            # Stepwise bias: prefer ±2 scale degrees from the previous pitch
+            if prev_idx is not None and rng.random() < step_bias:
+                lo = max(0, prev_idx - 2)
+                hi = min(len(scale_pitches) - 1, prev_idx + 2)
+                idx = rng.randint(lo, hi)
+            else:
+                idx = rng.randrange(len(scale_pitches))
+            prev_idx = idx
+            pitch = scale_pitches[idx]
+            jitter = rng.randint(-velocity_jitter, velocity_jitter) if velocity_jitter > 0 else 0
+            vel = max(1, min(127, VELOCITY_LEAD + jitter))
+            note_end = min(pos * sub_unit + length * sub_unit * sustain, section_end)
+            notes.append(pretty_midi.Note(velocity=vel, pitch=pitch,
+                                          start=pos * sub_unit, end=note_end))
         pos += length
     return notes
 
 
-def generate_bass_line(scale_pitches, n_beats, beat_len, rng):
+def generate_bass_line(scale_pitches, n_beats, beat_len, rng, gate=0.90):
     """Random bass within the scale's first octave transposed two octaves down,
-    one note per beat with a 90% hit probability."""
+    one note per beat with a 90% hit probability.  ``gate`` shortens each note
+    to that fraction of the beat, preventing note-off / note-on collisions."""
     first_octave = scale_pitches[: max(1, len(scale_pitches) // 3)]
     low_pitches = sorted({max(0, pitch - 24) for pitch in first_octave})
     notes = []
@@ -243,16 +288,18 @@ def generate_bass_line(scale_pitches, n_beats, beat_len, rng):
         if rng.random() < 0.9:
             pitch = rng.choice(low_pitches)
             notes.append(pretty_midi.Note(velocity=VELOCITY_BASS, pitch=pitch,
-                                          start=beat * beat_len, end=(beat + 1) * beat_len))
+                                          start=beat * beat_len,
+                                          end=beat * beat_len + beat_len * gate))
     return notes
 
 
-def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len):
+def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len, gate=0.85):
     """One diatonic chord per beat, rooted on the lead note sounding at that beat.
 
     The chord is built by stacking thirds within the scale (scale degrees i, i+2,
     i+4) and dropped one octave so it sits under the lead. Beats where no lead
-    note sounds are rests.
+    note sounds are rests.  ``gate`` shortens each chord to that fraction of the
+    beat so successive chords breathe rather than collide.
     """
     notes = []
     for beat in range(n_beats):
@@ -268,7 +315,7 @@ def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len):
         chord = {scale_pitches[min(i + step, len(scale_pitches) - 1)] for step in (0, 2, 4)}
         for pitch in chord:
             notes.append(pretty_midi.Note(velocity=VELOCITY_CHORD, pitch=max(0, pitch - 12),
-                                          start=t, end=t + beat_len))
+                                          start=t, end=t + beat_len * gate))
     return notes
 
 
@@ -342,7 +389,8 @@ def render_section(resolved, rng=None):
 
     # b) bass line
     bass_role = resolved.roles[ROLE_BASS]
-    bass_line = generate_bass_line(scale_pitches, n_beats, beat_len, rng) if bass_role.main else []
+    bass_line = generate_bass_line(scale_pitches, n_beats, beat_len, rng,
+                                   gate=resolved.bass_gate) if bass_role.main else []
     add(bass_role.main, bass_line)
     for support in bass_role.supports:
         add(support, derive_support_line(bass_line, beat_len, beats_per_bar, "bar-first-beat"))
@@ -350,14 +398,19 @@ def render_section(resolved, rng=None):
     # c) lead line
     lead_role = resolved.roles[ROLE_LEAD]
     lead_line = generate_lead_line(scale_pitches, n_beats, beat_len, rng,
-                                   mode=resolved.beat_mode, tempo=resolved.tempo) if lead_role.main else []
+                                   mode=resolved.beat_mode, tempo=resolved.tempo,
+                                   rest_prob=resolved.lead_rest_prob,
+                                   sustain=resolved.lead_sustain,
+                                   velocity_jitter=resolved.lead_velocity_jitter,
+                                   step_bias=resolved.lead_step_bias) if lead_role.main else []
     add(lead_role.main, lead_line)
     for support in lead_role.supports:
         add(support, derive_support_line(lead_line, beat_len, beats_per_bar, "even-beats"))
 
     # d) accompaniment chords from the lead line
     accomp_role = resolved.roles[ROLE_ACCOMPANIMENT]
-    chord_line = generate_chord_line(lead_line, scale_pitches, n_beats, beat_len) if accomp_role.main else []
+    chord_line = generate_chord_line(lead_line, scale_pitches, n_beats, beat_len,
+                                     gate=resolved.chord_gate) if accomp_role.main else []
     add(accomp_role.main, chord_line)
     for support in accomp_role.supports:
         add(support, derive_support_line(chord_line, beat_len, beats_per_bar, "bar-head"))

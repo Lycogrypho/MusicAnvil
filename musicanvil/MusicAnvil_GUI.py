@@ -19,9 +19,18 @@ BEAT_MODE_OPTIONS = list(ma_utils.BEAT_MODES.keys())
 DRUM_INSTRUMENTS = list(ma_utils.drum_pitches.keys())
 DEFAULT_SECTION_NAMES = ["Intro", "Verse", "Chorus", "Solo", "Bridge", "Outro"]
 
+# (key, label, default, is_int)
+ARTIC_PARAMS = [
+    ("lead_rest_prob",       "Lead Rest Prob (0–1):",  "0.08", False),
+    ("lead_sustain",         "Lead Sustain (0–2):",    "0.95", False),
+    ("lead_velocity_jitter", "Lead Vel. Jitter:",      "12",   True),
+    ("lead_step_bias",       "Lead Step Bias (0–1):",  "0.70", False),
+    ("bass_gate",            "Bass Gate (0–1):",       "0.90", False),
+    ("chord_gate",           "Chord Gate (0–1):",      "0.85", False),
+]
+
 
 def _entry_label(entry):
-    """Format a StructureEntry for the structure listbox."""
     if isinstance(entry, str):
         return entry
     if entry.transformer is None:
@@ -80,7 +89,6 @@ class DrumEditor:
         return self.rhythm_var.get()
 
     def get_drums_enabled(self):
-        """Return None (all active) or a list of active drum names."""
         sel = list(self.drum_lb.curselection())
         if len(sel) == len(DRUM_INSTRUMENTS):
             return None
@@ -176,9 +184,10 @@ class MusicGeneratorApp:
         self._create_default_sections()
         self._autosave_enabled = True
 
-    # ----------------------------------------------------------------- Piece tab
+    # ----------------------------------------------------------------- Main tab
 
     def _build_piece_tab(self):
+        # ---- Piece Defaults (left column) ----
         defaults = tk.LabelFrame(self.piece_tab, text="Piece Defaults")
         defaults.grid(row=0, column=0, padx=10, pady=10, sticky="nw")
         defaults.columnconfigure(0, minsize=110)
@@ -216,8 +225,21 @@ class MusicGeneratorApp:
         self.filename_var = tk.StringVar(value="output")
         tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=5, column=1, sticky="w", padx=5, pady=3)
 
+        # ---- Articulation Defaults (right of Piece Defaults) ----
+        artic = tk.LabelFrame(self.piece_tab, text="Articulation Defaults")
+        artic.grid(row=0, column=1, padx=10, pady=10, sticky="nw")
+        artic.columnconfigure(0, minsize=160)
+
+        self.artic_vars: dict[str, tk.StringVar] = {}
+        for r, (key, label, default, _is_int) in enumerate(ARTIC_PARAMS):
+            tk.Label(artic, text=label, anchor="w").grid(row=r, column=0, sticky="ew", padx=5, pady=3)
+            var = tk.StringVar(value=default)
+            tk.Entry(artic, textvariable=var, width=8).grid(row=r, column=1, sticky="w", padx=5, pady=3)
+            self.artic_vars[key] = var
+
+        # ---- Default Roles (below, spanning both columns) ----
         roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
-        roles_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nw")
+        roles_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="nw")
 
         drum_sub = tk.Frame(roles_frame)
         drum_sub.grid(row=0, column=0, sticky="n")
@@ -231,7 +253,93 @@ class MusicGeneratorApp:
             MusicAnvil.ROLE_BASS: "Bass",
         }, list_height=10)
 
-    # -------------------------------------------------------------- Structure tab
+    # --------------------------------------------------------------- Sections tab
+
+    def _build_sections_tab(self):
+        library = tk.LabelFrame(self.sections_tab, text="Section Library")
+        library.grid(row=0, column=0, padx=10, pady=10, sticky="n")
+
+        lf, self.library_listbox = _scrolled_listbox(library, height=14, width=20)
+        lf.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+        self.library_listbox.bind("<<ListboxSelect>>", self._load_section)
+
+        tk.Button(library, text="New Section", command=self._new_section).grid(row=1, column=0, padx=5, pady=3)
+        tk.Button(library, text="Delete", command=self._delete_section).grid(row=1, column=1, padx=5, pady=3)
+
+        editor = tk.LabelFrame(self.sections_tab, text="Section Editor")
+        editor.grid(row=0, column=1, padx=10, pady=10, sticky="n")
+
+        tk.Label(editor, text="Bars:").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        self.bars_var = tk.StringVar(value="4")
+        tk.Spinbox(editor, from_=1, to=128, textvariable=self.bars_var,
+                   width=6).grid(row=0, column=1, sticky="w", padx=5, pady=3)
+
+        self.sec_override: dict[str, tuple[tk.BooleanVar, tk.StringVar]] = {}
+
+        def override_row(row, key, label, widget_values, width):
+            check_var = tk.BooleanVar(value=False)
+            tk.Checkbutton(editor, text=label, variable=check_var).grid(
+                row=row, column=0, sticky="w", padx=5, pady=2)
+            value_var = tk.StringVar()
+            if widget_values is None:
+                tk.Entry(editor, textvariable=value_var, width=width).grid(
+                    row=row, column=1, sticky="w", padx=5, pady=2)
+            else:
+                ttk.Combobox(editor, textvariable=value_var, values=widget_values,
+                             state="readonly", width=width).grid(
+                    row=row, column=1, sticky="w", padx=5, pady=2)
+            self.sec_override[key] = (check_var, value_var)
+
+        # Musical overrides
+        override_row(1,  "tempo",       "Override Tempo (BPM)",   None,                               8)
+        override_row(2,  "signature",   "Override Signature",     SIGNATURE_OPTIONS,                  6)
+        override_row(3,  "rhythm",      "Override Rhythm",        list(ma_utils.drum_lines.keys()),  14)
+        override_row(4,  "scale",       "Override Scale",         list(ma_utils.scale_definitions.keys()), 14)
+        override_row(5,  "tonic",       "Override Tonic Note",    ma_utils.notes_in_octave,           6)
+        override_row(6,  "tonic_octave","Override Tonic Octave",  OCTAVE_OPTIONS,                     4)
+        override_row(7,  "beat_mode",   "Override Beat Mode",     BEAT_MODE_OPTIONS,                 18)
+
+        # Articulation overrides
+        override_row(8,  "lead_rest_prob",       "Override Rest Prob",     None,  8)
+        override_row(9,  "lead_sustain",         "Override Lead Sustain",  None,  8)
+        override_row(10, "lead_velocity_jitter", "Override Vel. Jitter",   None,  6)
+        override_row(11, "lead_step_bias",       "Override Step Bias",     None,  8)
+        override_row(12, "bass_gate",            "Override Bass Gate",     None,  8)
+        override_row(13, "chord_gate",           "Override Chord Gate",    None,  8)
+
+        # Drums enabled override (listbox — separate from override_row)
+        self._sec_drums_override_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(editor, text="Override Drums Enabled",
+                       variable=self._sec_drums_override_var).grid(
+            row=14, column=0, sticky="w", padx=5, pady=2)
+        dlf, self._sec_drums_lb = _scrolled_listbox(editor, height=4, width=15, selectmode=tk.MULTIPLE)
+        dlf.grid(row=14, column=1, padx=5, pady=2, sticky="w")
+        for name in DRUM_INSTRUMENTS:
+            self._sec_drums_lb.insert(tk.END, name)
+        self._sec_drums_lb.selection_set(0, tk.END)
+
+        # Roles override
+        self.sec_roles_override_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(editor, text="Override Roles",
+                       variable=self.sec_roles_override_var).grid(
+            row=15, column=0, sticky="w", padx=5, pady=2)
+        roles_holder = tk.Frame(editor)
+        roles_holder.grid(row=16, column=0, columnspan=2, padx=5, pady=3)
+        self.sec_roles = RoleEditor(roles_holder, on_change=self._auto_save_section)
+
+        self.sec_duration_label = tk.Label(editor, text="Duration: --:--")
+        self.sec_duration_label.grid(row=17, column=0, columnspan=2, pady=5)
+
+        # Wire auto-save to every field
+        self.bars_var.trace_add("write", self._auto_save_section)
+        for check_var, value_var in self.sec_override.values():
+            check_var.trace_add("write", self._auto_save_section)
+            value_var.trace_add("write", self._auto_save_section)
+        self.sec_roles_override_var.trace_add("write", self._auto_save_section)
+        self._sec_drums_override_var.trace_add("write", self._auto_save_section)
+        self._sec_drums_lb.bind("<<ListboxSelect>>", self._auto_save_section)
+
+    # ------------------------------------------------------------- Structure tab
 
     def _build_structure_tab(self):
         structure = tk.LabelFrame(self.structure_tab, text="Piece Structure")
@@ -326,90 +434,13 @@ class MusicGeneratorApp:
         except Exception:
             self.total_label.config(text="Total duration: --:--")
 
-    # --------------------------------------------------------------- Sections tab
-
-    def _build_sections_tab(self):
-        library = tk.LabelFrame(self.sections_tab, text="Section Library")
-        library.grid(row=0, column=0, padx=10, pady=10, sticky="n")
-
-        lf, self.library_listbox = _scrolled_listbox(library, height=14, width=20)
-        lf.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
-        self.library_listbox.bind("<<ListboxSelect>>", self._load_section)
-
-        tk.Button(library, text="New Section", command=self._new_section).grid(row=1, column=0, padx=5, pady=3)
-        tk.Button(library, text="Delete", command=self._delete_section).grid(row=1, column=1, padx=5, pady=3)
-
-        editor = tk.LabelFrame(self.sections_tab, text="Section Editor")
-        editor.grid(row=0, column=1, padx=10, pady=10, sticky="n")
-
-        tk.Label(editor, text="Bars:").grid(row=0, column=0, sticky="w", padx=5, pady=3)
-        self.bars_var = tk.StringVar(value="4")
-        tk.Spinbox(editor, from_=1, to=128, textvariable=self.bars_var,
-                   width=6).grid(row=0, column=1, sticky="w", padx=5, pady=3)
-
-        self.sec_override: dict[str, tuple[tk.BooleanVar, tk.StringVar]] = {}
-
-        def override_row(row, key, label, widget_values, width):
-            check_var = tk.BooleanVar(value=False)
-            tk.Checkbutton(editor, text=label, variable=check_var).grid(
-                row=row, column=0, sticky="w", padx=5, pady=2)
-            value_var = tk.StringVar()
-            if widget_values is None:
-                tk.Entry(editor, textvariable=value_var, width=width).grid(
-                    row=row, column=1, sticky="w", padx=5, pady=2)
-            else:
-                ttk.Combobox(editor, textvariable=value_var, values=widget_values,
-                             state="readonly", width=width).grid(
-                    row=row, column=1, sticky="w", padx=5, pady=2)
-            self.sec_override[key] = (check_var, value_var)
-
-        override_row(1, "tempo",      "Override Tempo (BPM)",    None,                              8)
-        override_row(2, "signature",  "Override Signature",      SIGNATURE_OPTIONS,                 6)
-        override_row(3, "rhythm",     "Override Rhythm",         list(ma_utils.drum_lines.keys()), 14)
-        override_row(4, "scale",      "Override Scale",          list(ma_utils.scale_definitions.keys()), 14)
-        override_row(5, "tonic",      "Override Tonic Note",     ma_utils.notes_in_octave,          6)
-        override_row(6, "tonic_octave","Override Tonic Octave",  OCTAVE_OPTIONS,                    4)
-        override_row(7, "beat_mode",  "Override Beat Mode",      BEAT_MODE_OPTIONS,                18)
-
-        # Drums enabled override (needs a listbox — separate from override_row)
-        self._sec_drums_override_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(editor, text="Override Drums Enabled",
-                       variable=self._sec_drums_override_var).grid(
-            row=8, column=0, sticky="w", padx=5, pady=2)
-        dlf, self._sec_drums_lb = _scrolled_listbox(editor, height=4, width=15, selectmode=tk.MULTIPLE)
-        dlf.grid(row=8, column=1, padx=5, pady=2, sticky="w")
-        for name in DRUM_INSTRUMENTS:
-            self._sec_drums_lb.insert(tk.END, name)
-        self._sec_drums_lb.selection_set(0, tk.END)
-
-        # Roles override
-        self.sec_roles_override_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(editor, text="Override Roles",
-                       variable=self.sec_roles_override_var).grid(
-            row=9, column=0, sticky="w", padx=5, pady=2)
-        roles_holder = tk.Frame(editor)
-        roles_holder.grid(row=10, column=0, columnspan=2, padx=5, pady=3)
-        self.sec_roles = RoleEditor(roles_holder, on_change=self._auto_save_section)
-
-        self.sec_duration_label = tk.Label(editor, text="Duration: --:--")
-        self.sec_duration_label.grid(row=11, column=0, columnspan=2, pady=5)
-
-        # Wire auto-save to every field (no Apply button)
-        self.bars_var.trace_add("write", self._auto_save_section)
-        for check_var, value_var in self.sec_override.values():
-            check_var.trace_add("write", self._auto_save_section)
-            value_var.trace_add("write", self._auto_save_section)
-        self.sec_roles_override_var.trace_add("write", self._auto_save_section)
-        self._sec_drums_override_var.trace_add("write", self._auto_save_section)
-        self._sec_drums_lb.bind("<<ListboxSelect>>", self._auto_save_section)
+    # --------------------------------------------------------- Section CRUD
 
     def _create_default_sections(self):
         for name in DEFAULT_SECTION_NAMES:
             self.sections[name] = MusicAnvil.SectionSpec(name=name)
             self.library_listbox.insert(tk.END, name)
         self._refresh_section_choices()
-
-    # --------------------------------------------------------- Section CRUD
 
     def _selected_library_name(self) -> str | None:
         sel = self.library_listbox.curselection()
@@ -462,19 +493,33 @@ class MusicGeneratorApp:
         beat_mode_label = next(
             (lbl for lbl, num in ma_utils.BEAT_MODES.items() if num == spec.beat_mode), None
         )
-        loaders = {
-            "tempo":       None if spec.tempo is None else str(spec.tempo),
-            "signature":   None if spec.signature is None else f"{spec.signature[0]}/{spec.signature[1]}",
-            "rhythm":      spec.rhythm,
-            "scale":       spec.scale,
-            "tonic":       spec.tonic,
+        musical_loaders = {
+            "tempo":        None if spec.tempo is None else str(spec.tempo),
+            "signature":    None if spec.signature is None else f"{spec.signature[0]}/{spec.signature[1]}",
+            "rhythm":       spec.rhythm,
+            "scale":        spec.scale,
+            "tonic":        spec.tonic,
             "tonic_octave": None if spec.tonic_octave is None else str(spec.tonic_octave),
-            "beat_mode":   beat_mode_label,
+            "beat_mode":    beat_mode_label,
         }
-        for key, value in loaders.items():
+        for key, value in musical_loaders.items():
             check_var, value_var = self.sec_override[key]
             check_var.set(value is not None)
             value_var.set(value if value is not None else "")
+
+        # Articulation overrides
+        artic_loaders = {
+            "lead_rest_prob":       spec.lead_rest_prob,
+            "lead_sustain":         spec.lead_sustain,
+            "lead_velocity_jitter": spec.lead_velocity_jitter,
+            "lead_step_bias":       spec.lead_step_bias,
+            "bass_gate":            spec.bass_gate,
+            "chord_gate":           spec.chord_gate,
+        }
+        for key, value in artic_loaders.items():
+            check_var, value_var = self.sec_override[key]
+            check_var.set(value is not None)
+            value_var.set("" if value is None else str(value))
 
         # Drums enabled override
         has_drums_override = spec.drums_enabled is not None
@@ -496,7 +541,6 @@ class MusicGeneratorApp:
     # -------------------------------------------------------- Auto-save logic
 
     def _auto_save_section(self, *_):
-        """Silently persist section editor state; swallow validation errors."""
         if not self._autosave_enabled:
             return
         name = self._selected_library_name()
@@ -512,10 +556,11 @@ class MusicGeneratorApp:
             self.sec_duration_label.config(text="Duration: --:--")
 
     def _build_section_spec(self, name):
-        """Parse section editor widgets into a SectionSpec (may raise ValueError)."""
         spec = MusicAnvil.SectionSpec(name=str(name), bars=int(self.bars_var.get()))
         if spec.bars <= 0:
             raise ValueError("Bars must be positive.")
+
+        # Musical overrides
         check_var, value_var = self.sec_override["tempo"]
         if check_var.get():
             spec.tempo = int(value_var.get())
@@ -537,9 +582,20 @@ class MusicGeneratorApp:
         check_var, value_var = self.sec_override["beat_mode"]
         if check_var.get():
             spec.beat_mode = ma_utils.BEAT_MODES[value_var.get()]
+
+        # Articulation overrides
+        for key, _label, _default, is_int in ARTIC_PARAMS:
+            check_var, value_var = self.sec_override[key]
+            if check_var.get():
+                raw = value_var.get()
+                setattr(spec, key, int(raw) if is_int else float(raw))
+
+        # Drums enabled override
         if self._sec_drums_override_var.get():
             sel = list(self._sec_drums_lb.curselection())
             spec.drums_enabled = [DRUM_INSTRUMENTS[i] for i in sel]
+
+        # Roles override
         if self.sec_roles_override_var.get():
             spec.roles = self.sec_roles.get_roles()
         return spec
@@ -558,10 +614,18 @@ class MusicGeneratorApp:
 
     # ---------------------------------------------------------------- Generation
 
+    def _parse_artic(self) -> dict:
+        result = {}
+        for key, _label, _default, is_int in ARTIC_PARAMS:
+            raw = self.artic_vars[key].get()
+            result[key] = int(raw) if is_int else float(raw)
+        return result
+
     def _current_piece_spec(self):
         tempo = int(self.tempo_var.get())
         if tempo <= 0:
             raise ValueError("Tempo must be a positive number.")
+        artic = self._parse_artic()
         piece = MusicAnvil.PieceSpec(
             tempo=tempo,
             signature=MusicAnvil.parse_signature(self.signature_var.get()),
@@ -571,6 +635,12 @@ class MusicGeneratorApp:
             tonic_octave=int(self.tonic_octave_var.get()),
             beat_mode=ma_utils.BEAT_MODES[self.beat_mode_var.get()],
             drums_enabled=self.piece_drum_editor.get_drums_enabled(),
+            lead_rest_prob=artic["lead_rest_prob"],
+            lead_sustain=artic["lead_sustain"],
+            lead_velocity_jitter=artic["lead_velocity_jitter"],
+            lead_step_bias=artic["lead_step_bias"],
+            bass_gate=artic["bass_gate"],
+            chord_gate=artic["chord_gate"],
             roles=self.piece_roles.get_roles(),
             sections=dict(self.sections),
             structure=list(self.structure),
