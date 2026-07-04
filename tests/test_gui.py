@@ -45,7 +45,8 @@ class TestGUIImport(unittest.TestCase):
                 app = gui_mod.MusicGeneratorApp(MagicMock())
             except Exception as exc:
                 self.fail(f"MusicGeneratorApp() raised: {exc}")
-            self.assertEqual(app.sections, {})
+            self.assertEqual(list(app.sections.keys()),
+                             ["Intro", "Verse", "Chorus", "Solo", "Bridge", "Outro"])
             self.assertEqual(app.structure, [])
 
     def test_fmt_mmss(self):

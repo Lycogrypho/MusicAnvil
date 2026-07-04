@@ -80,6 +80,7 @@ class SectionSpec:
     tonic: str | None = None
     tonic_octave: int | None = None
     beat_mode: int | None = None
+    drums_enabled: list[str] | None = None
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
 
 
@@ -108,6 +109,7 @@ class PieceSpec:
     tonic: str = "C"
     tonic_octave: int = 4
     beat_mode: int = ma_utils.BEAT_MODE_FIXED_16TH
+    drums_enabled: list[str] | None = None
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
     structure: list[StructureEntry | str] = field(default_factory=list)
@@ -125,6 +127,7 @@ class ResolvedSection:
     tonic: str
     tonic_octave: int
     beat_mode: int
+    drums_enabled: list[str] | None
     roles: dict[str, RoleAssignment]
 
 
@@ -168,6 +171,7 @@ def resolve_section(section, piece):
         tonic=section.tonic if section.tonic is not None else piece.tonic,
         tonic_octave=section.tonic_octave if section.tonic_octave is not None else piece.tonic_octave,
         beat_mode=section.beat_mode if section.beat_mode is not None else piece.beat_mode,
+        drums_enabled=section.drums_enabled if section.drums_enabled is not None else piece.drums_enabled,
         roles=roles,
     )
 
@@ -317,17 +321,23 @@ def render_section(resolved, rng=None):
             tracks.setdefault(instrument, []).extend(notes)
 
     # a) drums: repeat the genre pattern until the section is filled
-    adapted = ma_utils.adapt_drum_line(ma_utils.drum_lines[resolved.rhythm], resolved.tempo)
-    pattern_len = max(entry[3] for entry in adapted)
+    drum_line = list(ma_utils.drum_lines[resolved.rhythm])
+    if resolved.drums_enabled is not None:
+        enabled_pitches = {ma_utils.drum_pitches[n] for n in resolved.drums_enabled
+                           if n in ma_utils.drum_pitches}
+        drum_line = [e for e in drum_line if e[1] in enabled_pitches]
     drum_notes = []
-    t = 0.0
-    while t < length - 1e-9:
-        for velocity, pitch, start, end in adapted:
-            if t + start >= length:
-                continue
-            drum_notes.append(pretty_midi.Note(velocity=velocity, pitch=pitch,
-                                               start=t + start, end=min(t + end, length)))
-        t += pattern_len
+    if drum_line:
+        adapted = ma_utils.adapt_drum_line(drum_line, resolved.tempo)
+        pattern_len = max(entry[3] for entry in adapted)
+        t = 0.0
+        while t < length - 1e-9:
+            for velocity, pitch, start, end in adapted:
+                if t + start >= length:
+                    continue
+                drum_notes.append(pretty_midi.Note(velocity=velocity, pitch=pitch,
+                                                   start=t + start, end=min(t + end, length)))
+            t += pattern_len
     tracks[DRUM_TRACK] = drum_notes
 
     # b) bass line
