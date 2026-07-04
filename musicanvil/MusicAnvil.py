@@ -404,7 +404,12 @@ def render_piece(piece, rng=None):
         if instrument_name == DRUM_TRACK:
             instrument = pretty_midi.Instrument(program=0, is_drum=True, name=DRUM_TRACK)
         else:
-            instrument = pretty_midi.Instrument(program=INSTRUMENT_PROGRAMS.get(instrument_name, 0),
+            if instrument_name not in INSTRUMENT_PROGRAMS:
+                raise ValueError(
+                    f"Unknown instrument '{instrument_name}'. "
+                    f"Valid names: {sorted(INSTRUMENT_PROGRAMS)}"
+                )
+            instrument = pretty_midi.Instrument(program=INSTRUMENT_PROGRAMS[instrument_name],
                                                 name=instrument_name)
         instrument.notes.extend(notes)
         midi_data.instruments.append(instrument)

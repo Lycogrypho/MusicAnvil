@@ -226,6 +226,24 @@ class TestRenderPiece(unittest.TestCase):
         piece.sections["A"].tempo = 60  # half speed -> double length
         self.assertAlmostEqual(MusicAnvil.piece_seconds(piece), base_len * 2)
 
+    def test_unknown_instrument_name_raises(self):
+        """An instrument name not in INSTRUMENT_PROGRAMS must raise ValueError, not silently use GM 0."""
+        piece = _make_piece(structure=["A"])
+        piece.roles[MusicAnvil.ROLE_LEAD] = MusicAnvil.RoleAssignment(main="NotARealInstrument")
+        with self.assertRaises(ValueError) as ctx:
+            MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertIn("NotARealInstrument", str(ctx.exception))
+
+    def test_known_instrument_names_do_not_raise(self):
+        """Every name in INSTRUMENT_PROGRAMS must render without error."""
+        for name in MusicAnvil.INSTRUMENT_PROGRAMS:
+            piece = _make_piece(structure=["A"])
+            piece.roles[MusicAnvil.ROLE_LEAD] = MusicAnvil.RoleAssignment(main=name)
+            try:
+                MusicAnvil.render_piece(piece, random.Random(1))
+            except ValueError as exc:
+                self.fail(f"render_piece raised ValueError for known instrument '{name}': {exc}")
+
 
 class TestTonicOctave(unittest.TestCase):
     """Tests for tonic_octave threading through PieceSpec → resolve_section → render."""
