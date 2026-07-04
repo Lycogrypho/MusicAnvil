@@ -52,7 +52,7 @@ def _scrolled_listbox(parent, height, width, selectmode=tk.BROWSE, **kwargs):
 class DrumEditor:
     """Rhythm dropdown + drum instrument enable/disable listbox."""
 
-    def __init__(self, parent, on_change=None):
+    def __init__(self, parent, on_change=None, list_height=6):
         self._on_change = on_change
         frame = tk.LabelFrame(parent, text="Drums")
         frame.grid(row=0, column=0, padx=5, pady=5, sticky="n")
@@ -65,7 +65,7 @@ class DrumEditor:
         cb.bind("<<ComboboxSelected>>", self._fire)
 
         tk.Label(frame, text="Active:").grid(row=1, column=0, sticky="nw", padx=4, pady=2)
-        lf, self.drum_lb = _scrolled_listbox(frame, height=6, width=15, selectmode=tk.MULTIPLE)
+        lf, self.drum_lb = _scrolled_listbox(frame, height=list_height, width=15, selectmode=tk.MULTIPLE)
         lf.grid(row=1, column=1, padx=4, pady=2)
         for name in DRUM_INSTRUMENTS:
             self.drum_lb.insert(tk.END, name)
@@ -102,7 +102,7 @@ class DrumEditor:
 class RoleEditor:
     """Main + supports pickers for the three melodic roles, one column per role."""
 
-    def __init__(self, parent, defaults=None, on_change=None):
+    def __init__(self, parent, defaults=None, on_change=None, list_height=5):
         defaults = defaults or {}
         self._on_change = on_change
         self.main_vars: dict[str, tk.StringVar] = {}
@@ -118,7 +118,7 @@ class RoleEditor:
             cb.grid(row=0, column=1, padx=2, pady=2)
             cb.bind("<<ComboboxSelected>>", self._fire)
             tk.Label(frame, text="Supports:").grid(row=1, column=0, sticky="nw")
-            lf, box = _scrolled_listbox(frame, height=5, width=14, selectmode=tk.MULTIPLE)
+            lf, box = _scrolled_listbox(frame, height=list_height, width=14, selectmode=tk.MULTIPLE)
             lf.grid(row=1, column=1, padx=2, pady=2)
             for instrument in MELODIC_INSTRUMENTS:
                 box.insert(tk.END, instrument)
@@ -164,15 +164,15 @@ class MusicGeneratorApp:
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True, padx=5, pady=5)
         self.piece_tab = tk.Frame(notebook)
-        self.structure_tab = tk.Frame(notebook)
         self.sections_tab = tk.Frame(notebook)
-        notebook.add(self.piece_tab, text="Piece")
-        notebook.add(self.structure_tab, text="Structure")
+        self.structure_tab = tk.Frame(notebook)
+        notebook.add(self.piece_tab, text="Main")
         notebook.add(self.sections_tab, text="Sections")
+        notebook.add(self.structure_tab, text="Piece Structure")
 
         self._build_piece_tab()
-        self._build_structure_tab()
         self._build_sections_tab()
+        self._build_structure_tab()
         self._create_default_sections()
         self._autosave_enabled = True
 
@@ -181,22 +181,23 @@ class MusicGeneratorApp:
     def _build_piece_tab(self):
         defaults = tk.LabelFrame(self.piece_tab, text="Piece Defaults")
         defaults.grid(row=0, column=0, padx=10, pady=10, sticky="nw")
+        defaults.columnconfigure(0, minsize=110)
 
-        tk.Label(defaults, text="Tempo (BPM):").grid(row=0, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="Tempo (BPM):", anchor="w").grid(row=0, column=0, sticky="ew", padx=5, pady=3)
         self.tempo_var = tk.StringVar(value="120")
-        tk.Entry(defaults, textvariable=self.tempo_var, width=8).grid(row=0, column=1, padx=5, pady=3)
+        tk.Entry(defaults, textvariable=self.tempo_var, width=8).grid(row=0, column=1, sticky="w", padx=5, pady=3)
 
-        tk.Label(defaults, text="Signature:").grid(row=1, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="Signature:", anchor="w").grid(row=1, column=0, sticky="ew", padx=5, pady=3)
         self.signature_var = tk.StringVar(value="4/4")
         ttk.Combobox(defaults, textvariable=self.signature_var, values=SIGNATURE_OPTIONS,
-                     state="readonly", width=6).grid(row=1, column=1, padx=5, pady=3)
+                     state="readonly", width=6).grid(row=1, column=1, sticky="w", padx=5, pady=3)
 
-        tk.Label(defaults, text="Scale:").grid(row=2, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="Scale:", anchor="w").grid(row=2, column=0, sticky="ew", padx=5, pady=3)
         self.scale_var = tk.StringVar(value=list(ma_utils.scale_definitions.keys())[0])
         ttk.Combobox(defaults, textvariable=self.scale_var, values=list(ma_utils.scale_definitions.keys()),
-                     state="readonly", width=14).grid(row=2, column=1, padx=5, pady=3)
+                     state="readonly", width=14).grid(row=2, column=1, sticky="w", padx=5, pady=3)
 
-        tk.Label(defaults, text="Tonic Note:").grid(row=3, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="Tonic Note:", anchor="w").grid(row=3, column=0, sticky="ew", padx=5, pady=3)
         tonic_frame = tk.Frame(defaults)
         tonic_frame.grid(row=3, column=1, padx=5, pady=3, sticky="w")
         self.tonic_var = tk.StringVar(value=ma_utils.notes_in_octave[0])
@@ -206,21 +207,21 @@ class MusicGeneratorApp:
         ttk.Combobox(tonic_frame, textvariable=self.tonic_octave_var, values=OCTAVE_OPTIONS,
                      state="readonly", width=3).pack(side="left", padx=(4, 0))
 
-        tk.Label(defaults, text="Beat Mode:").grid(row=4, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="Beat Mode:", anchor="w").grid(row=4, column=0, sticky="ew", padx=5, pady=3)
         self.beat_mode_var = tk.StringVar(value=BEAT_MODE_OPTIONS[0])
         ttk.Combobox(defaults, textvariable=self.beat_mode_var, values=BEAT_MODE_OPTIONS,
-                     state="readonly", width=18).grid(row=4, column=1, padx=5, pady=3)
+                     state="readonly", width=18).grid(row=4, column=1, sticky="w", padx=5, pady=3)
 
-        tk.Label(defaults, text="FileName:").grid(row=5, column=0, sticky="w", padx=5, pady=3)
+        tk.Label(defaults, text="FileName:", anchor="w").grid(row=5, column=0, sticky="ew", padx=5, pady=3)
         self.filename_var = tk.StringVar(value="output")
-        tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=5, column=1, padx=5, pady=3)
+        tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=5, column=1, sticky="w", padx=5, pady=3)
 
         roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
         roles_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nw")
 
         drum_sub = tk.Frame(roles_frame)
         drum_sub.grid(row=0, column=0, sticky="n")
-        self.piece_drum_editor = DrumEditor(drum_sub)
+        self.piece_drum_editor = DrumEditor(drum_sub, list_height=10)
 
         melodic_sub = tk.Frame(roles_frame)
         melodic_sub.grid(row=0, column=1, sticky="n")
@@ -228,7 +229,7 @@ class MusicGeneratorApp:
             MusicAnvil.ROLE_LEAD: "Piano",
             MusicAnvil.ROLE_ACCOMPANIMENT: "Guitar",
             MusicAnvil.ROLE_BASS: "Bass",
-        })
+        }, list_height=10)
 
     # -------------------------------------------------------------- Structure tab
 
@@ -288,6 +289,10 @@ class MusicGeneratorApp:
         entry = MusicAnvil.StructureEntry(section=name, transformer=transformer, transformer_kwargs=kwargs)
         self.structure.append(entry)
         self.structure_listbox.insert(tk.END, _entry_label(entry))
+        idx = self.structure_listbox.size() - 1
+        self.structure_listbox.selection_clear(0, tk.END)
+        self.structure_listbox.selection_set(idx)
+        self.structure_listbox.see(idx)
         self._update_total()
 
     def _remove_from_structure(self):
@@ -422,6 +427,11 @@ class MusicGeneratorApp:
             return
         self.sections[name] = MusicAnvil.SectionSpec(name=name)
         self.library_listbox.insert(tk.END, name)
+        idx = self.library_listbox.size() - 1
+        self.library_listbox.selection_clear(0, tk.END)
+        self.library_listbox.selection_set(idx)
+        self.library_listbox.see(idx)
+        self._load_section()
         self._refresh_section_choices()
 
     def _delete_section(self):
