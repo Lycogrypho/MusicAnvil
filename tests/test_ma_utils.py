@@ -146,6 +146,29 @@ class TestGenerateRandomBeatGuards(unittest.TestCase):
             self.fail("generate_random_beat raised ValueError with a valid notes list")
 
 
+class TestGenerateRandomBeatDurationGuard(unittest.TestCase):
+    """P2 #13 — generate_random_beat must raise ValueError for beat_duration <= 0."""
+
+    def test_zero_beat_duration_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_random_beat([60], tempo=120, beat_duration=0)
+
+    def test_negative_beat_duration_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_random_beat([60], tempo=120, beat_duration=-1.0)
+
+    def test_zero_beat_duration_error_names_value(self):
+        with self.assertRaises(ValueError) as ctx:
+            ma_utils.generate_random_beat([60], tempo=120, beat_duration=0)
+        self.assertIn("0", str(ctx.exception))
+
+    def test_positive_beat_duration_does_not_raise(self):
+        try:
+            ma_utils.generate_random_beat([60], tempo=120, beat_duration=1.0)
+        except ValueError:
+            self.fail("generate_random_beat raised ValueError for a valid beat_duration")
+
+
 class TestWriteNotesToMidi(unittest.TestCase):
     """P2 #5 — write_notes_to_midi must not mutate the caller's instrument object."""
 
@@ -209,6 +232,70 @@ class TestWriteNotesToMidi(unittest.TestCase):
             ma_utils.write_notes_to_midi([note], path, instrument=instrument)
             result = pretty_midi.PrettyMIDI(path)
             self.assertEqual(result.instruments[0].program, 25)
+        finally:
+            os.unlink(path)
+
+
+class TestWriteInstrumentsToMidi(unittest.TestCase):
+    """P2 #12 — write_instruments_to_midi must raise a clear ValueError for unknown GM names."""
+
+    def _make_note(self):
+        import pretty_midi
+        return pretty_midi.Note(velocity=80, pitch=60, start=0.0, end=0.5)
+
+    def test_unknown_gm_name_raises_value_error(self):
+        """An instrument name not in the GM spec must raise ValueError, not a cryptic internal error."""
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                ma_utils.write_instruments_to_midi({"NotAGMName": [self._make_note()]}, path)
+            self.assertIn("NotAGMName", str(ctx.exception))
+        finally:
+            os.unlink(path)
+
+    def test_unknown_gm_name_error_message_is_informative(self):
+        """The error message must name the offending instrument so callers can act on it."""
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                ma_utils.write_instruments_to_midi({"FakeGuitar9000": [self._make_note()]}, path)
+            msg = str(ctx.exception)
+            self.assertIn("FakeGuitar9000", msg)
+            self.assertIn("General MIDI", msg)
+        finally:
+            os.unlink(path)
+
+    def test_valid_gm_name_does_not_raise(self):
+        """A standard GM name must write a file without raising."""
+        import pretty_midi, tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            ma_utils.write_instruments_to_midi(
+                {"Acoustic Grand Piano": [self._make_note()]}, path
+            )
+            result = pretty_midi.PrettyMIDI(path)
+            self.assertEqual(len(result.instruments), 1)
+            self.assertEqual(len(result.instruments[0].notes), 1)
+        finally:
+            os.unlink(path)
+
+    def test_error_raised_for_second_instrument_names_it_correctly(self):
+        """When the first instrument is valid and the second is bad, the error names the second."""
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+            path = f.name
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                ma_utils.write_instruments_to_midi({
+                    "Acoustic Grand Piano": [self._make_note()],
+                    "DefinitelyFake": [self._make_note()],
+                }, path)
+            self.assertIn("DefinitelyFake", str(ctx.exception))
         finally:
             os.unlink(path)
 
@@ -537,6 +624,33 @@ class TestAdaptDrumLineVelocityScaling(unittest.TestCase):
     def test_unit_scaling_preserves_velocities(self):
         result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=1.0)
         self.assertEqual([e[0] for e in result], [100, 80, 120])
+
+
+class TestAdaptDrumLineNegativeScalingGuard(unittest.TestCase):
+    """P2 #14 — adapt_drum_line must raise ValueError for negative velocity_scaling_factor."""
+
+    DRUM_LINE = [[100, 35, 0, 1], [80, 38, 1, 2]]
+
+    def test_negative_scaling_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=-1.0)
+
+    def test_negative_scaling_error_names_value(self):
+        with self.assertRaises(ValueError) as ctx:
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=-0.5)
+        self.assertIn("-0.5", str(ctx.exception))
+
+    def test_zero_scaling_does_not_raise(self):
+        try:
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=0)
+        except ValueError:
+            self.fail("adapt_drum_line raised ValueError for velocity_scaling_factor=0")
+
+    def test_positive_scaling_does_not_raise(self):
+        try:
+            ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, velocity_scaling_factor=1.5)
+        except ValueError:
+            self.fail("adapt_drum_line raised ValueError for a valid velocity_scaling_factor")
 
 
 if __name__ == "__main__":

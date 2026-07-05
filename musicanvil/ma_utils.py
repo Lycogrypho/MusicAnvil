@@ -68,7 +68,13 @@ def write_instruments_to_midi(instrument_notes, midi_file_path):
     """Write a dict of {instrument_name: [Note, ...]} to a MIDI file."""
     midi_data = pretty_midi.PrettyMIDI()
     for instrument_name, notes in instrument_notes.items():
-        program_number = pretty_midi.instrument_name_to_program(instrument_name)
+        try:
+            program_number = pretty_midi.instrument_name_to_program(instrument_name)
+        except ValueError:
+            raise ValueError(
+                f"'{instrument_name}' is not a valid General MIDI instrument name. "
+                "Use pretty_midi.instrument_name_to_program() to look up valid names."
+            )
         instrument = pretty_midi.Instrument(program=program_number)
         for note in notes:
             instrument.notes.append(note)
@@ -310,6 +316,8 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
         raise ValueError("available_notes must not be empty.")
     if tempo <= 0:
         raise ValueError(f"tempo must be a positive number of BPM, got {tempo}.")
+    if beat_duration <= 0:
+        raise ValueError(f"beat_duration must be a positive number of seconds, got {beat_duration}.")
 
     base_duration, max_mult = _beat_sub_unit(tempo, time_signature, mode)
 
@@ -408,6 +416,10 @@ def adapt_drum_line(drum_line, tempo, velocity_scaling_factor=1.0):
     """
     if tempo <= 0:
         raise ValueError(f"tempo must be a positive number of BPM, got {tempo}.")
+    if velocity_scaling_factor < 0:
+        raise ValueError(
+            f"velocity_scaling_factor must be non-negative, got {velocity_scaling_factor}."
+        )
     quarter_note_duration = 60.0 / tempo
 
     adapted_line = []
