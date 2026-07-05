@@ -40,24 +40,19 @@ ROLES = (ROLE_LEAD, ROLE_ACCOMPANIMENT, ROLE_BASS)
 
 DRUM_TRACK = "Drums"
 
-# Melodic instrument name -> General MIDI program number.
-INSTRUMENT_PROGRAMS = {
-    "Piano": 0,        # Acoustic Grand Piano
-    "Organ": 19,       # Church Organ
-    "Guitar": 25,          # Acoustic Guitar (steel)
-    "Electric Guitar": 27, # Electric Guitar (clean)
-    "Bass": 32,            # Acoustic Bass
-    "Violin": 40,      # Violin
-    "Strings": 48,     # String Ensemble 1
-    "Trumpet": 56,     # Trumpet
-    "Sax": 65,         # Alto Sax
-    "Flute": 73,       # Flute
-}
+# Constants and defaults are sourced from the external MusicAnvil.json (see
+# ma_utils.load_config) so all tunable data lives in one place.
+_CFG = ma_utils.load_config()
+_PIECE_DEFAULTS = _CFG["piece_defaults"]
 
-VELOCITY_LEAD = 100
-VELOCITY_BASS = 90
-VELOCITY_CHORD = 78
-VELOCITY_SUPPORT = 68
+# Melodic instrument name -> General MIDI program number.
+INSTRUMENT_PROGRAMS = _CFG["instrument_programs"]
+
+_VELOCITIES = _CFG["velocities"]
+VELOCITY_LEAD = _VELOCITIES["lead"]
+VELOCITY_BASS = _VELOCITIES["bass"]
+VELOCITY_CHORD = _VELOCITIES["chord"]
+VELOCITY_SUPPORT = _VELOCITIES["support"]
 
 
 @dataclass
@@ -72,7 +67,7 @@ class SectionSpec:
     """A named section. Every field except ``name`` and ``bars`` is an optional
     override; ``None`` (or a missing role key) means "inherit the piece default"."""
     name: str
-    bars: int = 4
+    bars: int = _PIECE_DEFAULTS["section_bars"]
     tempo: int | None = None
     signature: tuple[int, int] | None = None
     rhythm: str | None = None
@@ -109,21 +104,21 @@ class StructureEntry:
 @dataclass
 class PieceSpec:
     """Piece-wide defaults plus the section library and the ordered structure."""
-    tempo: int = 120
-    signature: tuple[int, int] = (4, 4)
-    rhythm: str = "Rock"
-    scale: str = "major"
-    tonic: str = "C"
-    tonic_octave: int = 4
-    beat_mode: int = ma_utils.BEAT_MODE_FIXED_16TH
+    tempo: int = _PIECE_DEFAULTS["tempo"]
+    signature: tuple[int, int] = tuple(_PIECE_DEFAULTS["signature"])
+    rhythm: str = _PIECE_DEFAULTS["rhythm"]
+    scale: str = _PIECE_DEFAULTS["scale"]
+    tonic: str = _PIECE_DEFAULTS["tonic"]
+    tonic_octave: int = _PIECE_DEFAULTS["tonic_octave"]
+    beat_mode: int = _PIECE_DEFAULTS["beat_mode"]
     drums_enabled: list[str] | None = None
     # Articulation defaults
-    lead_rest_prob: float = 0.08       # probability of rest (vs note) per sub-unit slot
-    lead_sustain: float = 0.95         # note end = start + length * sub_unit * sustain
-    lead_velocity_jitter: int = 12     # max ±offset applied to VELOCITY_LEAD per note
-    lead_step_bias: float = 0.70       # probability of choosing ±2 scale degrees from prev
-    bass_gate: float = 0.90            # bass note length as fraction of beat_len
-    chord_gate: float = 0.85           # chord note length as fraction of beat_len
+    lead_rest_prob: float = _PIECE_DEFAULTS["lead_rest_prob"]       # probability of rest (vs note) per sub-unit slot
+    lead_sustain: float = _PIECE_DEFAULTS["lead_sustain"]          # note end = start + length * sub_unit * sustain
+    lead_velocity_jitter: int = _PIECE_DEFAULTS["lead_velocity_jitter"]  # max ±offset applied to VELOCITY_LEAD per note
+    lead_step_bias: float = _PIECE_DEFAULTS["lead_step_bias"]       # probability of choosing ±2 scale degrees from prev
+    bass_gate: float = _PIECE_DEFAULTS["bass_gate"]                # bass note length as fraction of beat_len
+    chord_gate: float = _PIECE_DEFAULTS["chord_gate"]             # chord note length as fraction of beat_len
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
     structure: list[StructureEntry | str] = field(default_factory=list)

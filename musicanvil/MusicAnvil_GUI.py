@@ -10,23 +10,28 @@ except ImportError:  # script-directory launch
 
 # OopCompanion:suppressRename
 
+# GUI presets and defaults come from the external MusicAnvil.json (see ma_utils.load_config).
+_CFG = ma_utils.load_config()
+_GUI = _CFG["gui"]
+_PIECE_DEFAULTS = _CFG["piece_defaults"]
+
 MELODIC_INSTRUMENTS = list(MusicAnvil.INSTRUMENT_PROGRAMS.keys())
 NONE_CHOICE = "(none)"
-SIGNATURE_OPTIONS = ["4/4", "2/2", "2/4", "3/4", "6/8"]
-OCTAVE_OPTIONS = ["2", "3", "4", "5", "6"]
+SIGNATURE_OPTIONS = _GUI["signature_options"]
+OCTAVE_OPTIONS = _GUI["octave_options"]
 TRANSFORMER_OPTIONS = [NONE_CHOICE] + sorted(ma_utils.BEAT_TRANSFORMERS)
 BEAT_MODE_OPTIONS = list(ma_utils.BEAT_MODES.keys())
 DRUM_INSTRUMENTS = list(ma_utils.drum_pitches.keys())
-DEFAULT_SECTION_NAMES = ["Intro", "Verse", "Chorus", "Solo", "Bridge", "Outro"]
+DEFAULT_SECTION_NAMES = _GUI["default_section_names"]
 
-# (key, label, default, is_int)
+# (key, label, default, is_int) — default values are read from piece_defaults in the config.
 ARTIC_PARAMS = [
-    ("lead_rest_prob",       "Lead Rest Prob (0–1):",  "0.08", False),
-    ("lead_sustain",         "Lead Sustain (0–2):",    "0.95", False),
-    ("lead_velocity_jitter", "Lead Vel. Jitter:",      "12",   True),
-    ("lead_step_bias",       "Lead Step Bias (0–1):",  "0.70", False),
-    ("bass_gate",            "Bass Gate (0–1):",       "0.90", False),
-    ("chord_gate",           "Chord Gate (0–1):",      "0.85", False),
+    ("lead_rest_prob",       "Lead Rest Prob (0–1):",  str(_PIECE_DEFAULTS["lead_rest_prob"]),       False),
+    ("lead_sustain",         "Lead Sustain (0–2):",    str(_PIECE_DEFAULTS["lead_sustain"]),         False),
+    ("lead_velocity_jitter", "Lead Vel. Jitter:",      str(_PIECE_DEFAULTS["lead_velocity_jitter"]), True),
+    ("lead_step_bias",       "Lead Step Bias (0–1):",  str(_PIECE_DEFAULTS["lead_step_bias"]),       False),
+    ("bass_gate",            "Bass Gate (0–1):",       str(_PIECE_DEFAULTS["bass_gate"]),            False),
+    ("chord_gate",           "Chord Gate (0–1):",      str(_PIECE_DEFAULTS["chord_gate"]),           False),
 ]
 
 
@@ -193,26 +198,27 @@ class MusicGeneratorApp:
         defaults.columnconfigure(0, minsize=110)
 
         tk.Label(defaults, text="Tempo (BPM):", anchor="w").grid(row=0, column=0, sticky="ew", padx=5, pady=3)
-        self.tempo_var = tk.StringVar(value="120")
+        self.tempo_var = tk.StringVar(value=str(_PIECE_DEFAULTS["tempo"]))
         tk.Entry(defaults, textvariable=self.tempo_var, width=8).grid(row=0, column=1, sticky="w", padx=5, pady=3)
 
         tk.Label(defaults, text="Signature:", anchor="w").grid(row=1, column=0, sticky="ew", padx=5, pady=3)
-        self.signature_var = tk.StringVar(value="4/4")
+        signature_default = "{}/{}".format(*_PIECE_DEFAULTS["signature"])
+        self.signature_var = tk.StringVar(value=signature_default)
         ttk.Combobox(defaults, textvariable=self.signature_var, values=SIGNATURE_OPTIONS,
                      state="readonly", width=6).grid(row=1, column=1, sticky="w", padx=5, pady=3)
 
         tk.Label(defaults, text="Scale:", anchor="w").grid(row=2, column=0, sticky="ew", padx=5, pady=3)
-        self.scale_var = tk.StringVar(value=list(ma_utils.scale_definitions.keys())[0])
+        self.scale_var = tk.StringVar(value=_PIECE_DEFAULTS["scale"])
         ttk.Combobox(defaults, textvariable=self.scale_var, values=list(ma_utils.scale_definitions.keys()),
                      state="readonly", width=14).grid(row=2, column=1, sticky="w", padx=5, pady=3)
 
         tk.Label(defaults, text="Tonic Note:", anchor="w").grid(row=3, column=0, sticky="ew", padx=5, pady=3)
         tonic_frame = tk.Frame(defaults)
         tonic_frame.grid(row=3, column=1, padx=5, pady=3, sticky="w")
-        self.tonic_var = tk.StringVar(value=ma_utils.notes_in_octave[0])
+        self.tonic_var = tk.StringVar(value=_PIECE_DEFAULTS["tonic"])
         ttk.Combobox(tonic_frame, textvariable=self.tonic_var, values=ma_utils.notes_in_octave,
                      state="readonly", width=4).pack(side="left")
-        self.tonic_octave_var = tk.StringVar(value="4")
+        self.tonic_octave_var = tk.StringVar(value=str(_PIECE_DEFAULTS["tonic_octave"]))
         ttk.Combobox(tonic_frame, textvariable=self.tonic_octave_var, values=OCTAVE_OPTIONS,
                      state="readonly", width=3).pack(side="left", padx=(4, 0))
 
@@ -222,7 +228,7 @@ class MusicGeneratorApp:
                      state="readonly", width=18).grid(row=4, column=1, sticky="w", padx=5, pady=3)
 
         tk.Label(defaults, text="FileName:", anchor="w").grid(row=5, column=0, sticky="ew", padx=5, pady=3)
-        self.filename_var = tk.StringVar(value="output")
+        self.filename_var = tk.StringVar(value=_GUI["default_filename"])
         tk.Entry(defaults, textvariable=self.filename_var, width=16).grid(row=5, column=1, sticky="w", padx=5, pady=3)
 
         # ---- Articulation Defaults (right of Piece Defaults) ----
@@ -247,11 +253,7 @@ class MusicGeneratorApp:
 
         melodic_sub = tk.Frame(roles_frame)
         melodic_sub.grid(row=0, column=1, sticky="n")
-        self.piece_roles = RoleEditor(melodic_sub, defaults={
-            MusicAnvil.ROLE_LEAD: "Piano",
-            MusicAnvil.ROLE_ACCOMPANIMENT: "Guitar",
-            MusicAnvil.ROLE_BASS: "Bass",
-        }, list_height=10)
+        self.piece_roles = RoleEditor(melodic_sub, defaults=_GUI["default_roles"], list_height=10)
 
     # --------------------------------------------------------------- Sections tab
 
@@ -654,7 +656,7 @@ class MusicGeneratorApp:
             piece = self._current_piece_spec()
             if not piece.structure:
                 raise ValueError("The piece structure is empty — add at least one section.")
-            filename = self.filename_var.get().strip() or "output"
+            filename = self.filename_var.get().strip() or _GUI["default_filename"]
             if not filename.endswith(".mid"):
                 filename += ".mid"
             midi_data = MusicAnvil.render_piece(piece)

@@ -1,6 +1,62 @@
+import json
+import os
 import random
 
 import pretty_midi
+
+
+## Configuration Loading
+
+# The external configuration file lives next to this module so it is found
+# regardless of the current working directory (package import or script launch).
+CONFIG_FILENAME = "MusicAnvil.json"
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILENAME)
+
+_config_cache = None
+
+
+def load_config(path=None, force_reload=False):
+    """Read the MusicAnvil.json configuration file and return it as a dict.
+
+    The parsed configuration is cached after the first read; pass
+    ``force_reload=True`` to re-read from disk (e.g. after editing the file).
+
+    Parameters:
+    - path: Optional explicit path to a config file. Defaults to ``CONFIG_PATH``.
+    - force_reload: When True, bypass the cache and re-read from disk.
+
+    Raises FileNotFoundError if the file is missing and ValueError if it does
+    not contain valid JSON.
+    """
+    global _config_cache
+    target = path or CONFIG_PATH
+    if _config_cache is not None and not force_reload and path is None:
+        return _config_cache
+
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            config = json.load(handle)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Configuration file not found: {target}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Configuration file '{target}' contains invalid JSON: {exc}")
+
+    if path is None:
+        _config_cache = config
+    return config
+
+
+def get_param(*keys, default=None):
+    """Return a nested configuration value, e.g. ``get_param('piece_defaults', 'tempo')``.
+
+    Returns ``default`` if any key along the path is missing.
+    """
+    node = load_config()
+    for key in keys:
+        if not isinstance(node, dict) or key not in node:
+            return default
+        node = node[key]
+    return node
 
 
 ## Utility Functions
@@ -92,140 +148,25 @@ def print_midi_notes_detailed(midi_file_path):
             print(f"  Note: {note.pitch}, Start: {note.start:.2f}, End: {note.end:.2f}, Velocity: {note.velocity}")
 
 
+# Musical primitives and preset data — loaded from MusicAnvil.json (see load_config).
+# These module-level names are populated from the configuration file so the data
+# lives in one external place; the engine and GUI keep referencing them as before.
+_CONFIG = load_config()
+
 # The twelve note names in an octave (sharps only — no flats).
-notes_in_octave = [
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
-]
+notes_in_octave = _CONFIG["notes_in_octave"]
 
 # Scale definitions: scale name -> semitone intervals from the tonic.
-scale_definitions = {
-    "major": [0, 2, 4, 5, 7, 9, 11],              # Major scale intervals
-    "natural_minor": [0, 2, 3, 5, 7, 8, 10],      # Natural minor scale intervals
-    "harmonic_minor": [0, 2, 3, 5, 7, 8, 11],     # Harmonic minor scale intervals
-    "melodic_minor": [0, 2, 3, 5, 7, 9, 11],      # Melodic minor scale intervals (ascending)
-    "dorian": [0, 2, 3, 5, 7, 9, 10],             # Dorian mode intervals
-    "phrygian": [0, 1, 3, 5, 7, 8, 10],           # Phrygian mode intervals
-    "lydian": [0, 2, 4, 6, 7, 9, 11],             # Lydian mode intervals
-    "mixolydian": [0, 2, 4, 5, 7, 9, 10],         # Mixolydian mode intervals
-    "locrian": [0, 1, 3, 5, 6, 8, 10],            # Locrian mode intervals
-    "blues": [0, 3, 5, 6, 7, 10],                 # Blues scale intervals
-    "pentatonic_major": [0, 2, 4, 7, 9],          # Major pentatonic scale intervals
-    "pentatonic_minor": [0, 3, 5, 7, 10],         # Minor pentatonic scale intervals
-    "chromatic": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],  # Chromatic scale intervals
-}
+scale_definitions = _CONFIG["scale_definitions"]
 
 # Chord definitions: chord type -> semitone intervals from the tonic.
-chord_definitions = {
-    "major": [0, 4, 7],          # Major chord intervals (root, major third, perfect fifth)
-    "minor": [0, 3, 7],          # Minor chord intervals (root, minor third, perfect fifth)
-    "diminished": [0, 3, 6],     # Diminished chord intervals (root, minor third, diminished fifth)
-    "augmented": [0, 4, 8],      # Augmented chord intervals (root, major third, augmented fifth)
-    "major7": [0, 4, 7, 11],     # Major 7th chord intervals
-    "minor7": [0, 3, 7, 10],     # Minor 7th chord intervals
-    "dominant7": [0, 4, 7, 10],  # Dominant 7th chord intervals
-}
+chord_definitions = _CONFIG["chord_definitions"]
 
 # Drum name -> General MIDI percussion pitch.
-drum_pitches = {
-    "Bass Drum": 35,        # Acoustic Bass Drum
-    "Snare Drum": 38,       # Acoustic Snare
-    "Closed Hi-Hat": 42,    # Closed Hi-Hat
-    "Open Hi-Hat": 46,      # Open Hi-Hat
-    "Crash Cymbal": 49,     # Crash Cymbal 1
-    "Ride Cymbal": 51,      # Ride Cymbal 1
-    "Tom 1": 50,            # High Tom
-    "Tom 2": 47,            # Mid Tom
-    "Tom 3": 48,            # Low Tom
-    "Tambourine": 57,       # Tambourine
-}
+drum_pitches = _CONFIG["drum_pitches"]
 
 # Genre name -> list of [velocity, pitch, start_beat, end_beat] entries (beats, not seconds).
-drum_lines = {
-    "Rock": [
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 2],     # Snare Drum on beat 2
-        [80, drum_pitches["Closed Hi-Hat"], 0, 1],   # Hi-Hat on beat 1
-        [80, drum_pitches["Closed Hi-Hat"], 1, 2],   # Hi-Hat on beat 2
-        [100, drum_pitches["Bass Drum"], 2, 3],      # Bass Drum on beat 3
-        [100, drum_pitches["Snare Drum"], 3, 4],     # Snare Drum on beat 4
-    ],
-    "Bossa Nova": [
-        [80, drum_pitches["Bass Drum"], 0, 1],       # Bass Drum on beat 1
-        [80, drum_pitches["Snare Drum"], 0.5, 1.5],  # Snare Drum on the "and" of 1
-        [80, drum_pitches["Closed Hi-Hat"], 0, 1],   # Hi-Hat on beat 1
-        [80, drum_pitches["Closed Hi-Hat"], 1, 2],   # Hi-Hat on beat 2
-        [80, drum_pitches["Bass Drum"], 1.5, 2.5],   # Bass Drum on the "and" of 2
-        [80, drum_pitches["Snare Drum"], 2, 3],      # Snare Drum on beat 2
-    ],
-    "Waltz": [
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 1.5],   # Snare Drum on beat 2
-        [100, drum_pitches["Bass Drum"], 1.5, 2.5],  # Bass Drum on beat 3
-        [80, drum_pitches["Closed Hi-Hat"], 0, 2],   # Hi-Hat on beats 1 and 2
-    ],
-    "Rock and Roll": [
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 2],     # Snare Drum on beat 2
-        [100, drum_pitches["Bass Drum"], 2, 3],      # Bass Drum on beat 3
-        [80, drum_pitches["Closed Hi-Hat"], 0, 1],   # Hi-Hat on beat 1
-        [80, drum_pitches["Closed Hi-Hat"], 1, 2],   # Hi-Hat on beat 2
-        [80, drum_pitches["Closed Hi-Hat"], 2, 3],   # Hi-Hat on beat 3
-    ],
-    "Country": [     # Country: steady bass drum on the downbeats and a snare on the "and" of the beats, with closed hi-hats keeping time.
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 1.5],   # Snare Drum on the "and" of 1
-        [80, drum_pitches["Closed Hi-Hat"], 0, 1],   # Hi-Hat on beat 1
-        [80, drum_pitches["Closed Hi-Hat"], 1, 2],   # Hi-Hat on beat 2
-        [100, drum_pitches["Bass Drum"], 2, 3],      # Bass Drum on beat 3
-        [100, drum_pitches["Snare Drum"], 3, 3.5],   # Snare Drum on the "and" of 3
-    ],
-    "Blues": [      # Blues: similar to country but emphasizing the backbeat with the snare and a consistent hi-hat pattern.
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 1.5],   # Snare Drum on the "and" of 1
-        [80, drum_pitches["Closed Hi-Hat"], 0, 1],   # Hi-Hat on beat 1
-        [80, drum_pitches["Closed Hi-Hat"], 1, 2],   # Hi-Hat on beat 2
-        [100, drum_pitches["Bass Drum"], 2, 3],      # Bass Drum on beat 3
-        [100, drum_pitches["Snare Drum"], 3, 4],     # Snare Drum on beat 4
-        [80, drum_pitches["Closed Hi-Hat"], 2, 3],   # Hi-Hat on beat 3
-    ],
-    "Jazz": [      # Jazz: ride cymbal for a swing feel, with the bass drum and snare providing a syncopated groove.
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 1.5],   # Snare Drum on the "and" of 1
-        [80, drum_pitches["Closed Hi-Hat"], 0, 1],   # Hi-Hat on beat 1
-        [80, drum_pitches["Closed Hi-Hat"], 1, 2],   # Hi-Hat on beat 2
-        [100, drum_pitches["Bass Drum"], 2, 3],      # Bass Drum on beat 3
-        [100, drum_pitches["Snare Drum"], 3, 4],     # Snare Drum on beat 4
-        [80, drum_pitches["Ride Cymbal"], 0, 1],     # Ride Cymbal on beat 1
-        [80, drum_pitches["Ride Cymbal"], 1, 2],     # Ride Cymbal on beat 2
-    ],
-    "Metal": [     # Metal: driving bass drum and snare pattern, with closed hi-hats maintaining a consistent pulse.
-        [120, drum_pitches["Bass Drum"], 0, 0.5],    # Bass Drum on beat 1
-        [120, drum_pitches["Snare Drum"], 0.5, 1],   # Snare Drum on beat 1
-        [120, drum_pitches["Bass Drum"], 1, 1.5],    # Bass Drum on beat 2
-        [120, drum_pitches["Snare Drum"], 1.5, 2],   # Snare Drum on beat 2
-        [120, drum_pitches["Bass Drum"], 2, 2.5],    # Bass Drum on beat 3
-        [120, drum_pitches["Snare Drum"], 2.5, 3],   # Snare Drum on beat 3
-        [120, drum_pitches["Closed Hi-Hat"], 0, 3],  # Hi-Hat on all beats
-    ],
-    "Epic Metal": [  # Epic Metal: crash cymbals mark significant moments; a mix of bass and snare hits with a flowing ride cymbal.
-        [100, drum_pitches["Bass Drum"], 0, 1],      # Bass Drum on beat 1
-        [100, drum_pitches["Snare Drum"], 1, 1.5],   # Snare Drum on the "and" of 1
-        [100, drum_pitches["Bass Drum"], 1.5, 2.5],  # Bass Drum on the "and" of 2
-        [100, drum_pitches["Snare Drum"], 2.5, 3],   # Snare Drum on beat 3
-        [100, drum_pitches["Crash Cymbal"], 0, 0.5], # Crash Cymbal on beat 1
-        [80, drum_pitches["Ride Cymbal"], 0, 3],     # Ride Cymbal on all beats
-        [100, drum_pitches["Bass Drum"], 3, 4],      # Bass Drum on beat 4
-    ],
-    "Punk Rock": [
-        [120, drum_pitches["Bass Drum"], 0, 0.5],    # Bass Drum on beat 1
-        [120, drum_pitches["Snare Drum"], 0.5, 1],   # Snare Drum on beat 1
-        [120, drum_pitches["Bass Drum"], 1, 1.5],    # Bass Drum on beat 2
-        [120, drum_pitches["Snare Drum"], 1.5, 2],   # Snare Drum on beat 2
-        [120, drum_pitches["Bass Drum"], 2, 2.5],    # Bass Drum on beat 3
-        [120, drum_pitches["Snare Drum"], 2.5, 3],   # Snare Drum on beat 3
-        [120, drum_pitches["Closed Hi-Hat"], 0, 3],  # Hi-Hat on all beats
-    ],
-}
+drum_lines = _CONFIG["drum_lines"]
 
 
 def generate_scale(scale_name, tonic, start_octave=4):
@@ -270,10 +211,7 @@ BEAT_MODE_FIXED_16TH = 1   # Fixed 16th-note grid: rich sub-beat variety regardl
 BEAT_MODE_HALF_DENOM = 2   # Half the denominator unit: sub-beat variety that respects the signature
 
 # Human-readable labels for GUI dropdowns, keyed by display string → mode number.
-BEAT_MODES = {
-    "1 — Fixed 16th-note": BEAT_MODE_FIXED_16TH,
-    "2 — Half-beat":       BEAT_MODE_HALF_DENOM,
-}
+BEAT_MODES = _CONFIG["beat_modes"]
 
 
 def _beat_sub_unit(tempo, time_signature, mode):

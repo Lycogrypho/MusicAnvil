@@ -27,12 +27,32 @@ pip install pretty_midi
 | `musicanvil.MusicAnvil` | Composition engine — `PieceSpec`, `SectionSpec`, `render_piece`, etc. |
 | `musicanvil.ma_utils` | Utility library — scales, chords, drum patterns, MIDI helpers |
 | `musicanvil.MusicAnvil_GUI` | `tkinter` interface to the composition engine |
+| `musicanvil/MusicAnvil.json` | External configuration — all preset data and defaults (see [Configuration](#configuration)) |
 
 All public symbols from both `MusicAnvil` and `ma_utils` are re-exported at the package level, so you can write either:
 
 ```python
 from musicanvil import PieceSpec, generate_scale          # flat import
 from musicanvil import MusicAnvil, ma_utils               # module import
+```
+
+## Configuration
+
+All preset data and defaults live in a single external file, `musicanvil/MusicAnvil.json`, so they can be tweaked without touching code. It holds:
+
+- **Musical data** — `notes_in_octave`, `scale_definitions`, `chord_definitions`, `drum_pitches`, `drum_lines`, `beat_modes`
+- **Instrument mapping** — `instrument_programs` (name → General MIDI program) and `velocities` (lead / bass / chord / support)
+- **`piece_defaults`** — the default values for every `PieceSpec` / `SectionSpec` field (tempo, signature, scale, tonic, the six articulation parameters, section bars, …)
+- **`gui`** — dropdown option lists, default section names, default role assignments, and the default output filename
+
+`ma_utils` reads and caches the file at import time; the module-level dicts in `ma_utils` and the constants and dataclass defaults in `MusicAnvil` are all populated from it. To add a scale, a drum genre, or change a default, edit the JSON — no code change is needed.
+
+```python
+from musicanvil import ma_utils
+
+config = ma_utils.load_config()                       # full dict (cached)
+config = ma_utils.load_config(force_reload=True)      # re-read after editing the file
+tempo  = ma_utils.get_param("piece_defaults", "tempo")   # nested lookup → 120
 ```
 
 ---
@@ -362,6 +382,8 @@ ma_utils.print_midi_notes_detailed("output.mid")
 ---
 
 ## Reference
+
+The values below are the shipped defaults, all defined in `musicanvil/MusicAnvil.json` (see [Configuration](#configuration)) and editable there.
 
 ### Available Melodic Instruments
 
