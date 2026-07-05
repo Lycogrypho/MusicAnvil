@@ -1,5 +1,7 @@
+import json
+import os
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 try:
     from musicanvil import MusicAnvil, ma_utils
@@ -49,6 +51,114 @@ def _entry_label(entry):
 def fmt_mmss(seconds):
     minutes, secs = divmod(int(round(seconds)), 60)
     return f"{minutes:02d}:{secs:02d}"
+
+
+# --------------------------------------------------------------- Project I/O
+#
+# A project file is JSON capturing the full PieceSpec (piece defaults, roles, the
+# whole section library, and the ordered structure) plus the GUI output filename,
+# so a saved song can be reopened and edited exactly as it was.
+
+PROJECT_FORMAT = "musicanvil-project"
+PROJECT_VERSION = 1
+
+# Scalar (non-signature, non-roles) fields shared by PieceSpec and SectionSpec.
+_SECTION_SCALAR_FIELDS = (
+    "bars", "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",
+    "drums_enabled", "lead_rest_prob", "lead_sustain", "lead_velocity_jitter",
+    "lead_step_bias", "bass_gate", "chord_gate",
+)
+_PIECE_SCALAR_FIELDS = (
+    "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",
+    "drums_enabled", "lead_rest_prob", "lead_sustain", "lead_velocity_jitter",
+    "lead_step_bias", "bass_gate", "chord_gate",
+)
+
+
+def _roles_to_dict(roles):
+    return {role: {"main": ra.main, "supports": list(ra.supports)}
+            for role, ra in roles.items()}
+
+
+def _roles_from_dict(data):
+    return {role: MusicAnvil.RoleAssignment(main=value.get("main"),
+                                            supports=list(value.get("supports") or []))
+            for role, value in (data or {}).items()}
+
+
+def _section_to_dict(spec):
+    data = {"name": spec.name}
+    for field in _SECTION_SCALAR_FIELDS:
+        data[field] = getattr(spec, field)
+    data["signature"] = list(spec.signature) if spec.signature is not None else None
+    data["roles"] = _roles_to_dict(spec.roles) if spec.roles else {}
+    return data
+
+
+def _section_from_dict(data):
+    spec = MusicAnvil.SectionSpec(name=data["name"])
+    for field in _SECTION_SCALAR_FIELDS:
+        if field in data:
+            setattr(spec, field, data[field])
+    signature = data.get("signature")
+    spec.signature = tuple(signature) if signature is not None else None
+    spec.roles = _roles_from_dict(data.get("roles"))
+    return spec
+
+
+def _structure_entry_to_dict(entry):
+    if isinstance(entry, str):
+        return {"section": entry, "transformer": None, "transformer_kwargs": {}}
+    return {"section": entry.section,
+            "transformer": entry.transformer,
+            "transformer_kwargs": dict(entry.transformer_kwargs)}
+
+
+def _structure_entry_from_dict(data):
+    return MusicAnvil.StructureEntry(
+        section=data["section"],
+        transformer=data.get("transformer"),
+        transformer_kwargs=dict(data.get("transformer_kwargs") or {}),
+    )
+
+
+def piece_to_project_dict(piece, filename=""):
+    """Serialise a PieceSpec (+ GUI filename) to a JSON-ready project dict."""
+    piece_data = {field: getattr(piece, field) for field in _PIECE_SCALAR_FIELDS}
+    piece_data["signature"] = list(piece.signature)
+    piece_data["roles"] = _roles_to_dict(piece.roles)
+    return {
+        "format": PROJECT_FORMAT,
+        "version": PROJECT_VERSION,
+        "filename": filename,
+        "piece": piece_data,
+        "sections": [_section_to_dict(s) for s in piece.sections.values()],
+        "structure": [_structure_entry_to_dict(e) for e in piece.structure],
+    }
+
+
+def project_dict_to_piece(data):
+    """Rebuild a (PieceSpec, filename) pair from a project dict.
+
+    Raises ValueError if the dict is not a recognised MusicAnvil project.
+    """
+    if not isinstance(data, dict) or data.get("format") != PROJECT_FORMAT:
+        raise ValueError("This file is not a MusicAnvil project.")
+    piece_data = data.get("piece", {})
+    piece = MusicAnvil.PieceSpec()
+    for field in _PIECE_SCALAR_FIELDS:
+        if field in piece_data:
+            setattr(piece, field, piece_data[field])
+    signature = piece_data.get("signature")
+    if signature is not None:
+        piece.signature = tuple(signature)
+    piece.roles = _roles_from_dict(piece_data.get("roles"))
+    piece.sections = {}
+    for section_data in data.get("sections", []):
+        spec = _section_from_dict(section_data)
+        piece.sections[spec.name] = spec
+    piece.structure = [_structure_entry_from_dict(e) for e in data.get("structure", [])]
+    return piece, data.get("filename", "")
 
 
 def _scrolled_listbox(parent, height, width, selectmode=tk.BROWSE, **kwargs):
@@ -173,6 +283,9 @@ class MusicGeneratorApp:
         self.sections: dict[str, MusicAnvil.SectionSpec] = {}
         self.structure: list[MusicAnvil.StructureEntry] = []
         self._autosave_enabled = False
+        self._project_path = None
+
+        self._build_menu()
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True, padx=5, pady=5)
@@ -188,6 +301,144 @@ class MusicGeneratorApp:
         self._build_structure_tab()
         self._create_default_sections()
         self._autosave_enabled = True
+
+    # ----------------------------------------------------------------- Menu bar
+
+    def _build_menu(self):
+        menubar = tk.Menu(self.root)
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="New Project", command=self._new_project,
+                              accelerator="Ctrl+N")
+        file_menu.add_command(label="Open Project…", command=self._open_project,
+                              accelerator="Ctrl+O")
+        file_menu.add_separator()
+        file_menu.add_command(label="Save Project", command=self._save_project,
+                              accelerator="Ctrl+S")
+        file_menu.add_command(label="Save Project As…", command=self._save_project_as,
+                              accelerator="Ctrl+Shift+S")
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.destroy)
+        menubar.add_cascade(label="File", menu=file_menu)
+        self.root.config(menu=menubar)
+
+        self.root.bind("<Control-n>", lambda _e: self._new_project())
+        self.root.bind("<Control-o>", lambda _e: self._open_project())
+        self.root.bind("<Control-s>", lambda _e: self._save_project())
+        self.root.bind("<Control-S>", lambda _e: self._save_project_as())
+
+    # ------------------------------------------------------------- Project I/O
+
+    def _set_project_path(self, path):
+        self._project_path = path
+        suffix = f" — {os.path.basename(path)}" if path else ""
+        self.root.title(f"MusicAnvil — Piece Builder{suffix}")
+
+    def _new_project(self):
+        if not messagebox.askyesno("New Project",
+                                   "Discard the current project and start fresh?"):
+            return
+        piece = MusicAnvil.PieceSpec(
+            roles={role: MusicAnvil.RoleAssignment(main=_GUI["default_roles"].get(role))
+                   for role in MusicAnvil.ROLES},
+            sections={name: MusicAnvil.SectionSpec(name=name)
+                      for name in DEFAULT_SECTION_NAMES},
+            structure=[],
+        )
+        self._apply_piece_spec(piece, filename=_GUI["default_filename"])
+        self._set_project_path(None)
+
+    def _open_project(self):
+        path = filedialog.askopenfilename(
+            title="Open Project",
+            filetypes=[("MusicAnvil Project", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            piece, filename = project_dict_to_piece(data)
+        except (OSError, ValueError, KeyError) as exc:
+            messagebox.showerror("Open Failed", f"Could not load project:\n{exc}")
+            return
+        self._apply_piece_spec(piece, filename)
+        self._set_project_path(path)
+
+    def _save_project(self):
+        if self._project_path:
+            self._write_project(self._project_path)
+        else:
+            self._save_project_as()
+
+    def _save_project_as(self):
+        path = filedialog.asksaveasfilename(
+            title="Save Project",
+            defaultextension=".json",
+            filetypes=[("MusicAnvil Project", "*.json"), ("All files", "*.*")],
+            initialfile=(self.filename_var.get().strip() or "project"),
+        )
+        if not path:
+            return
+        self._write_project(path)
+
+    def _write_project(self, path):
+        try:
+            piece = self._current_piece_spec(require_lead=False)
+            data = piece_to_project_dict(piece, filename=self.filename_var.get().strip())
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, ensure_ascii=False)
+            self._set_project_path(path)
+        except Exception as exc:  # invalid tempo/signature, disk errors, …
+            messagebox.showerror("Save Failed", str(exc))
+
+    def _apply_piece_spec(self, piece, filename=""):
+        """Push a PieceSpec (and filename) into every widget on every tab."""
+        self._autosave_enabled = False
+        try:
+            self.tempo_var.set(str(piece.tempo))
+            self.signature_var.set(f"{piece.signature[0]}/{piece.signature[1]}")
+            self.scale_var.set(piece.scale)
+            self.tonic_var.set(piece.tonic)
+            self.tonic_octave_var.set(str(piece.tonic_octave))
+            self.beat_mode_var.set(self._beat_mode_label(piece.beat_mode))
+            if filename:
+                self.filename_var.set(filename)
+
+            for key in self.artic_vars:
+                self.artic_vars[key].set(str(getattr(piece, key)))
+
+            self.piece_drum_editor.set_rhythm(piece.rhythm)
+            self.piece_drum_editor.set_drums_enabled(piece.drums_enabled)
+            self.piece_roles.set_roles(piece.roles)
+
+            self.sections = dict(piece.sections)
+            self.library_listbox.delete(0, tk.END)
+            for name in self.sections:
+                self.library_listbox.insert(tk.END, name)
+
+            self.structure = list(piece.structure)
+            self.structure_listbox.delete(0, tk.END)
+            for entry in self.structure:
+                self.structure_listbox.insert(tk.END, _entry_label(entry))
+
+            self._refresh_section_choices()
+        finally:
+            self._autosave_enabled = True
+
+        # Reload the section editor from the first section (if any) so it no
+        # longer shows the previous project's values.
+        if self.sections:
+            self.library_listbox.selection_clear(0, tk.END)
+            self.library_listbox.selection_set(0)
+            self._load_section()
+        self._update_total()
+
+    @staticmethod
+    def _beat_mode_label(mode):
+        for label, number in ma_utils.BEAT_MODES.items():
+            if number == mode:
+                return label
+        return BEAT_MODE_OPTIONS[0]
 
     # ----------------------------------------------------------------- Main tab
 
@@ -623,7 +874,7 @@ class MusicGeneratorApp:
             result[key] = int(raw) if is_int else float(raw)
         return result
 
-    def _current_piece_spec(self):
+    def _current_piece_spec(self, require_lead=True):
         tempo = int(self.tempo_var.get())
         if tempo <= 0:
             raise ValueError("Tempo must be a positive number.")
@@ -647,7 +898,7 @@ class MusicGeneratorApp:
             sections=dict(self.sections),
             structure=list(self.structure),
         )
-        if piece.roles[MusicAnvil.ROLE_LEAD].main is None:
+        if require_lead and piece.roles[MusicAnvil.ROLE_LEAD].main is None:
             raise ValueError("A main Lead instrument is required.")
         return piece
 

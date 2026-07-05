@@ -6,6 +6,7 @@ tkinter is mocked so these tests run headless.
 
 # OopCompanion:suppressRename
 
+import json
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -157,6 +158,101 @@ class TestStructureOperations(unittest.TestCase):
         app.structure_listbox.curselection = MagicMock(return_value=(0,))
         app._move_in_structure(-1)
         self.assertEqual(app.structure, ["intro", "verse"])
+
+
+class TestProjectSerialization(unittest.TestCase):
+    """Round-trip PieceSpec -> project dict -> PieceSpec via the GUI's I/O helpers."""
+
+    def _gui(self):
+        with _patched_tk():
+            return _fresh_gui_module()
+
+    def _sample_piece(self, MA):
+        return MA.PieceSpec(
+            tempo=132,
+            signature=(3, 4),
+            rhythm="Jazz",
+            scale="dorian",
+            tonic="D",
+            tonic_octave=3,
+            lead_rest_prob=0.2,
+            drums_enabled=["Bass Drum", "Snare Drum"],
+            roles={
+                MA.ROLE_LEAD: MA.RoleAssignment(main="Piano", supports=["Flute"]),
+                MA.ROLE_ACCOMPANIMENT: MA.RoleAssignment(main="Guitar"),
+                MA.ROLE_BASS: MA.RoleAssignment(main="Bass"),
+            },
+            sections={
+                "Verse": MA.SectionSpec(name="Verse", bars=8, tempo=140,
+                                        signature=(4, 4), drums_enabled=["Bass Drum"]),
+                "Chorus": MA.SectionSpec(
+                    name="Chorus", bars=4,
+                    roles={MA.ROLE_LEAD: MA.RoleAssignment(main="Sax")}),
+            },
+            structure=[
+                MA.StructureEntry(section="Verse"),
+                MA.StructureEntry(section="Chorus", transformer="tone_shift",
+                                  transformer_kwargs={"n": 5}),
+            ],
+        )
+
+    def test_round_trip_preserves_piece_defaults(self):
+        gui = self._gui()
+        from musicanvil import MusicAnvil as MA
+        piece = self._sample_piece(MA)
+        restored, filename = gui.project_dict_to_piece(
+            gui.piece_to_project_dict(piece, filename="song"))
+        self.assertEqual(filename, "song")
+        self.assertEqual(restored.tempo, 132)
+        self.assertEqual(restored.signature, (3, 4))
+        self.assertEqual(restored.rhythm, "Jazz")
+        self.assertEqual(restored.scale, "dorian")
+        self.assertEqual(restored.tonic, "D")
+        self.assertEqual(restored.tonic_octave, 3)
+        self.assertAlmostEqual(restored.lead_rest_prob, 0.2)
+        self.assertEqual(restored.drums_enabled, ["Bass Drum", "Snare Drum"])
+        self.assertEqual(restored.roles[MA.ROLE_LEAD].main, "Piano")
+        self.assertEqual(restored.roles[MA.ROLE_LEAD].supports, ["Flute"])
+
+    def test_round_trip_preserves_sections(self):
+        gui = self._gui()
+        from musicanvil import MusicAnvil as MA
+        restored, _ = gui.project_dict_to_piece(
+            gui.piece_to_project_dict(self._sample_piece(MA)))
+        self.assertEqual(set(restored.sections), {"Verse", "Chorus"})
+        verse = restored.sections["Verse"]
+        self.assertEqual(verse.bars, 8)
+        self.assertEqual(verse.tempo, 140)
+        self.assertEqual(verse.signature, (4, 4))
+        self.assertEqual(verse.drums_enabled, ["Bass Drum"])
+        # Inherited (unset) fields must remain None so they still inherit on load.
+        self.assertIsNone(verse.scale)
+        self.assertEqual(restored.sections["Chorus"].roles[MA.ROLE_LEAD].main, "Sax")
+
+    def test_round_trip_preserves_structure(self):
+        gui = self._gui()
+        from musicanvil import MusicAnvil as MA
+        restored, _ = gui.project_dict_to_piece(
+            gui.piece_to_project_dict(self._sample_piece(MA)))
+        self.assertEqual(len(restored.structure), 2)
+        self.assertEqual(restored.structure[0].section, "Verse")
+        self.assertIsNone(restored.structure[0].transformer)
+        self.assertEqual(restored.structure[1].section, "Chorus")
+        self.assertEqual(restored.structure[1].transformer, "tone_shift")
+        self.assertEqual(restored.structure[1].transformer_kwargs, {"n": 5})
+
+    def test_project_dict_is_json_serialisable(self):
+        gui = self._gui()
+        from musicanvil import MusicAnvil as MA
+        text = json.dumps(gui.piece_to_project_dict(self._sample_piece(MA)))
+        restored, _ = gui.project_dict_to_piece(json.loads(text))
+        self.assertEqual(restored.tempo, 132)
+        self.assertEqual(restored.structure[1].transformer_kwargs, {"n": 5})
+
+    def test_rejects_non_project_dict(self):
+        gui = self._gui()
+        with self.assertRaises(ValueError):
+            gui.project_dict_to_piece({"foo": "bar"})
 
 
 if __name__ == "__main__":

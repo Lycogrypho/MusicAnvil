@@ -65,7 +65,21 @@ Launch the graphical interface:
 python musicanvil/MusicAnvil_GUI.py
 ```
 
-The GUI is organised into three tabs.
+The GUI is organised into three tabs, with a **File** menu for saving and loading projects.
+
+### File menu
+
+Save and reload a whole song as a `.json` **project file** — the piece defaults, articulation settings, default roles, the entire section library (with every per-section override), and the ordered structure are all captured.
+
+| Command | Shortcut | Action |
+|---|---|---|
+| New Project | Ctrl+N | Reset to the shipped defaults and the six default sections |
+| Open Project… | Ctrl+O | Load a project file, repopulating every tab |
+| Save Project | Ctrl+S | Save to the current project file (prompts if none yet) |
+| Save Project As… | Ctrl+Shift+S | Save to a new project file |
+| Exit | | Close the application |
+
+Project files are plain JSON (`format: "musicanvil-project"`) and are separate from `MusicAnvil.json`, which holds app-wide presets rather than a specific song. The serialisers are also available programmatically as `MusicAnvil_GUI.piece_to_project_dict(piece, filename)` and `project_dict_to_piece(data)`.
 
 ### Main tab
 
