@@ -168,6 +168,10 @@ drum_pitches = _CONFIG["drum_pitches"]
 # Genre name -> list of [velocity, pitch, start_beat, end_beat] entries (beats, not seconds).
 drum_lines = _CONFIG["drum_lines"]
 
+# Scale name -> list of [root_offset_from_tonic, chord_type] pairs that are allowed even when
+# not strictly diatonic. The engine applies these extensions alongside the normal scale filter.
+chord_palette_extensions = _CONFIG["chord_palette_extensions"]
+
 
 def generate_scale(scale_name, tonic, start_octave=4):
     """Return the note names of a scale over three octaves starting at *start_octave*.

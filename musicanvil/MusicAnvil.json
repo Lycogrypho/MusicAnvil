@@ -138,6 +138,22 @@
     ]
   },
 
+  "chord_palette_extensions": {
+    "major":            [[10, "major"], [10, "dominant7"], [3, "major"], [8, "major"], [2, "dominant7"]],
+    "natural_minor":    [[7, "major"], [7, "dominant7"]],
+    "harmonic_minor":   [],
+    "melodic_minor":    [],
+    "dorian":           [[7, "major"]],
+    "phrygian":         [[7, "major"]],
+    "lydian":           [],
+    "mixolydian":       [[7, "major"]],
+    "locrian":          [],
+    "blues":            [[0, "dominant7"], [5, "dominant7"], [7, "dominant7"]],
+    "pentatonic_major": [[10, "major"], [3, "major"], [7, "dominant7"]],
+    "pentatonic_minor": [[7, "major"], [0, "dominant7"]],
+    "chromatic":        []
+  },
+
   "beat_modes": {
     "1 — Fixed 16th-note": 1,
     "2 — Half-beat": 2

@@ -196,6 +196,75 @@ class TestGenerateChordLine(unittest.TestCase):
         self.assertEqual(chords, [])
 
 
+class TestGenerateChordLineExtensions(unittest.TestCase):
+    """chord_palette_extensions modify chord selection in generate_chord_line.
+
+    Three key behaviours:
+    (a) Diatonic chord on the primary root always beats an extension on the same root.
+    (b) Extension chord on the primary root beats a diatonic chord on the wrong root.
+    (c) Without scale_name the extension whitelist is empty (pure diatonic behaviour).
+    """
+
+    def _blues_scale_pitches(self):
+        return [pretty_midi.note_name_to_number(n)
+                for n in ma_utils.generate_scale("blues", "C", start_octave=4)]
+
+    def _note(self, pitch, start, end):
+        return pretty_midi.Note(velocity=100, pitch=pitch, start=start, end=end)
+
+    def test_diatonic_beats_extension_on_same_root(self):
+        # C lead in C blues. C minor {0,3,7} is diatonic. C dominant7 {0,4,7,10} is the
+        # I-chord blues extension (4=E not in blues). Diatonic must win.
+        blues = self._blues_scale_pitches()
+        lead = [self._note(72, 0.0, 0.5)]   # C5
+        chords = MusicAnvil.generate_chord_line(lead, blues, 1, 0.5, scale_name="blues")
+        self.assertTrue(chords, "No chord was generated")
+        chord_pcs = {n.pitch % 12 for n in chords}
+        self.assertNotIn(4, chord_pcs,  # E — the hallmark of C dominant7
+                         "Extension C dominant7 was chosen over diatonic C minor")
+        self.assertIn(0, chord_pcs)   # C root present
+        self.assertIn(3, chord_pcs)   # E♭ — hallmark of C minor
+
+    def test_extension_fires_when_no_diatonic_covers_full_beat(self):
+        # Beat has both C (0) and E (4). No diatonic chord in C blues contains E,
+        # so the C dominant7 extension (I7) must be chosen when scale_name="blues".
+        blues = self._blues_scale_pitches()
+        beat_len = 0.5
+        lead = [self._note(72, 0.0, beat_len),   # C5, pc=0
+                self._note(76, 0.0, beat_len)]    # E5, pc=4
+        chords = MusicAnvil.generate_chord_line(lead, blues, 1, beat_len, scale_name="blues")
+        self.assertTrue(chords, "No chord was generated with blues extensions")
+        chord_pcs = {n.pitch % 12 for n in chords}
+        self.assertIn(4, chord_pcs,   # E — only present if C dominant7 extension fired
+                      "Expected C dominant7 extension but got something else")
+
+    def test_no_scale_name_falls_back_to_diatonic(self):
+        # Same beat (C+E) without scale_name: extensions are inactive, so the engine
+        # falls back to harmonising just the primary (C alone) → C minor, no E.
+        blues = self._blues_scale_pitches()
+        beat_len = 0.5
+        lead = [self._note(72, 0.0, beat_len),
+                self._note(76, 0.0, beat_len)]
+        chords = MusicAnvil.generate_chord_line(lead, blues, 1, beat_len)  # no scale_name
+        self.assertTrue(chords, "No chord was generated without scale_name")
+        chord_pcs = {n.pitch % 12 for n in chords}
+        self.assertNotIn(4, chord_pcs,   # E must not appear (only in C dominant7)
+                         "Extension chord appeared without scale_name being supplied")
+
+    def test_extension_root_beats_diatonic_wrong_root(self):
+        # scale_pitches restricted to {C, E♭, G} (pitch classes 0, 3, 7).
+        # Lead = G5. No diatonic chord is rooted on G in this scale (G+anything ∉ {0,3,7}).
+        # Blues extension (7, "dominant7") → G dominant7 must win over C minor (diatonic,
+        # wrong root), because root preference outranks the diatonic preference.
+        restricted = [60, 63, 67]   # C4, Eb4, G4 → pcs {0, 3, 7}
+        lead = [self._note(79, 0.0, 0.5)]   # G5
+        chords = MusicAnvil.generate_chord_line(lead, restricted, 1, 0.5, scale_name="blues")
+        self.assertTrue(chords, "No chord was generated")
+        # Chord must be G-rooted (the extension chord), not C-rooted (the diatonic wrong root).
+        self.assertEqual(min(n.pitch for n in chords) % 12, 7,
+                         "Expected G-rooted extension chord but got a different root")
+
+
 class TestSupportDerivation(unittest.TestCase):
 
     def setUp(self):

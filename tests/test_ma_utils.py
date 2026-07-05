@@ -742,5 +742,36 @@ class TestAdaptDrumLineNegativeScalingGuard(unittest.TestCase):
             self.fail("adapt_drum_line raised ValueError for a valid velocity_scaling_factor")
 
 
+class TestChordPaletteExtensions(unittest.TestCase):
+    """chord_palette_extensions must be loaded from config and contain valid entries."""
+
+    def test_chord_palette_extensions_is_dict(self):
+        self.assertIsInstance(ma_utils.chord_palette_extensions, dict)
+
+    def test_known_scales_have_entries(self):
+        for scale in ("major", "natural_minor", "blues", "pentatonic_minor"):
+            self.assertIn(scale, ma_utils.chord_palette_extensions,
+                          f"'{scale}' missing from chord_palette_extensions")
+
+    def test_all_entries_are_valid_root_type_pairs(self):
+        for scale, entries in ma_utils.chord_palette_extensions.items():
+            for entry in entries:
+                self.assertEqual(len(entry), 2,
+                                 f"{scale}: entry {entry} is not a 2-element pair")
+                offset, chord_type = entry
+                self.assertIsInstance(offset, int,
+                                      f"{scale}: root offset {offset!r} is not an int")
+                self.assertIn(offset, range(12),
+                              f"{scale}: root offset {offset} is out of range 0–11")
+                self.assertIn(chord_type, ma_utils.chord_definitions,
+                              f"{scale}: chord type '{chord_type}' not in chord_definitions")
+
+    def test_blues_has_dominant7_on_i_iv_v(self):
+        blues_ext = [tuple(e) for e in ma_utils.chord_palette_extensions["blues"]]
+        self.assertIn((0, "dominant7"), blues_ext, "blues missing I dominant7 extension")
+        self.assertIn((5, "dominant7"), blues_ext, "blues missing IV dominant7 extension")
+        self.assertIn((7, "dominant7"), blues_ext, "blues missing V dominant7 extension")
+
+
 if __name__ == "__main__":
     unittest.main()

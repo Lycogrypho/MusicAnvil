@@ -15,7 +15,8 @@ Generation layers per section:
   c) lead line — random notes from the scale, 1-2 beats each
   d) accompaniment — one chord per beat, selected from ma_utils.chord_definitions to
      fit the lead notes sounding in that beat (via find_compatible_chords), kept within
-     the scale and voiced an octave below the lead
+     the scale or an idiomatic extension (ma_utils.chord_palette_extensions), voiced an
+     octave below the lead
   e) support instruments — partial replicas of their role's main line (lead supports
      play only even beats, accompaniment supports only the first half of each bar,
      bass supports only the first beat of each bar)
@@ -289,16 +290,19 @@ def generate_bass_line(scale_pitches, n_beats, beat_len, rng, gate=0.90):
     return notes
 
 
-def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, order):
-    """Return the MIDI pitches of the best diatonic chord for a beat, or None.
+def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order):
+    """Return the MIDI pitches of the best chord for a beat, or None.
 
     ``beat_pitches`` are the lead pitches sounding in the beat; ``primary`` is the
     pitch on the downbeat (the preferred root). Candidate chords come from
-    ``ma_utils.find_compatible_chords`` and are restricted to those whose tones all
-    fall within ``scale_pcs`` (the section scale's pitch classes), keeping the
-    accompaniment diatonic. The winner is rooted on the lead note where possible,
-    prefers a full triad, then richer chords, with ``order`` (chord-definition order)
-    as a stable tie-break. The chosen chord is voiced one octave below ``primary``.
+    ``ma_utils.find_compatible_chords`` and must pass at least one of two gates:
+    (a) strictly diatonic — all chord tones within ``scale_pcs``, or (b) an idiomatic
+    extension — ``((root - tonic_pc) % 12, chord_type)`` appears in ``extensions``
+    (loaded from ``ma_utils.chord_palette_extensions`` for the section's scale).
+
+    Sort order: root on lead note first, then diatonic before extension, then full
+    triad, then richer chord, then definition order, then root pitch class. The chosen
+    chord is voiced one octave below ``primary``.
     """
     primary_pc = primary % 12
     best = None
@@ -306,12 +310,15 @@ def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, order):
     for root, chord_type in ma_utils.find_compatible_chords(beat_pitches):
         intervals = ma_utils.chord_definitions[chord_type]
         chord_pcs = {(root + interval) % 12 for interval in intervals}
-        if not chord_pcs <= scale_pcs:  # keep the accompaniment in key
+        is_diatonic = chord_pcs <= scale_pcs
+        is_extended = ((root - tonic_pc) % 12, chord_type) in extensions
+        if not is_diatonic and not is_extended:
             continue
         key = (
             0 if root == primary_pc else 1,   # prefer a chord rooted on the lead note
+            0 if is_diatonic else 1,           # prefer diatonic within each root category
             0 if len(intervals) == 3 else 1,  # prefer a full triad
-            -len(intervals),                  # then richer chords (7ths over thirds)
+            -len(intervals),                  # then richer chords (7ths over dyads)
             order.get(chord_type, len(order)),
             root,
         )
@@ -326,20 +333,26 @@ def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, order):
     return [max(0, root_midi + interval) for interval in intervals]
 
 
-def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len, gate=0.85):
-    """One diatonic chord per beat, chosen to fit the lead notes sounding in that beat.
+def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len,
+                        scale_name=None, gate=0.85):
+    """One chord per beat, chosen to fit the lead notes sounding in that beat.
 
     For each beat, the lead notes overlapping it are collected and
     ``ma_utils.find_compatible_chords`` returns every chord from
-    ``ma_utils.chord_definitions`` whose tones contain those notes. Candidates are
-    restricted to chords that stay within the section scale, and the best is picked —
-    rooted on the lead note where possible, preferring a full triad — then voiced one
-    octave below the lead (see ``_voice_chord_for_beat``). If the full set of beat
-    notes has no diatonic match, the beat's downbeat note alone is harmonised; beats
-    with no lead note at all are rests. ``gate`` shortens each chord so successive
-    chords breathe rather than collide.
+    ``ma_utils.chord_definitions`` whose tones contain those notes. A candidate passes
+    if it is strictly diatonic (all tones within ``scale_pitches``'s pitch classes) OR
+    if it appears in ``ma_utils.chord_palette_extensions[scale_name]`` — a per-scale
+    whitelist of idiomatic non-diatonic chords (e.g. dominant-7th chords on I, IV, V
+    for blues). The best candidate is rooted on the lead note where possible, with
+    diatonic preferred over extension within that root group, then full triad, richer
+    chord, definition order (see ``_voice_chord_for_beat``). If the full set of beat
+    notes has no match, the beat's downbeat note alone is harmonised; beats with no
+    lead note are rests. ``gate`` shortens each chord so successive chords breathe.
     """
     scale_pcs = {pitch % 12 for pitch in scale_pitches}
+    tonic_pc = scale_pitches[0] % 12 if scale_pitches else 0
+    raw_ext = ma_utils.chord_palette_extensions.get(scale_name or "", [])
+    extensions = frozenset((offset, ctype) for offset, ctype in raw_ext)
     order = {name: index for index, name in enumerate(ma_utils.chord_definitions)}
     notes = []
     for beat in range(n_beats):
@@ -354,9 +367,9 @@ def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len, gate=0.85)
         if primary is None:
             continue
 
-        chord = _voice_chord_for_beat(beat_pitches, primary, scale_pcs, order)
+        chord = _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order)
         if chord is None:  # fall back to harmonising just the downbeat note
-            chord = _voice_chord_for_beat([primary], primary, scale_pcs, order)
+            chord = _voice_chord_for_beat([primary], primary, scale_pcs, tonic_pc, extensions, order)
         if chord is None:
             continue
 
@@ -457,6 +470,7 @@ def render_section(resolved, rng=None):
     # d) accompaniment chords from the lead line
     accomp_role = resolved.roles[ROLE_ACCOMPANIMENT]
     chord_line = generate_chord_line(lead_line, scale_pitches, n_beats, beat_len,
+                                     scale_name=resolved.scale,
                                      gate=resolved.chord_gate) if accomp_role.main else []
     add(accomp_role.main, chord_line)
     for support in accomp_role.supports:
