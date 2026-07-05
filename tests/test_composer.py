@@ -195,6 +195,25 @@ class TestGenerateChordLine(unittest.TestCase):
         chords = MusicAnvil.generate_chord_line([], self.scale_pitches, 4, self.beat_len)
         self.assertEqual(chords, [])
 
+    def test_default_chord_octave_shift_is_minus_two(self):
+        self.assertEqual(MusicAnvil.PieceSpec().chord_octave_shift, -2)
+
+    def test_chord_voiced_two_octaves_below_lead_by_default(self):
+        # C5 (72) lead, C major → C major triad. Default shift=-2 voices root at C3 (48).
+        chords = MusicAnvil.generate_chord_line(self._lead(72), self.scale_pitches, 1, self.beat_len)
+        root_pitch = min(n.pitch for n in chords)
+        self.assertEqual(root_pitch % 12, 0)          # C root
+        self.assertLessEqual(root_pitch, 72 - 24)     # at or below 2 octaves down
+
+    def test_chord_octave_shift_controls_voicing_depth(self):
+        # shift=-1 vs shift=-2 for the same lead note must differ by exactly one octave.
+        chords_m1 = MusicAnvil.generate_chord_line(
+            self._lead(72), self.scale_pitches, 1, self.beat_len, chord_octave_shift=-1)
+        chords_m2 = MusicAnvil.generate_chord_line(
+            self._lead(72), self.scale_pitches, 1, self.beat_len, chord_octave_shift=-2)
+        self.assertEqual(
+            min(n.pitch for n in chords_m1) - min(n.pitch for n in chords_m2), 12)
+
 
 class TestGenerateChordLineExtensions(unittest.TestCase):
     """chord_palette_extensions modify chord selection in generate_chord_line.

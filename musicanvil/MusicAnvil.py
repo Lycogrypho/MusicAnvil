@@ -85,6 +85,7 @@ class SectionSpec:
     lead_step_bias: float | None = None
     bass_gate: float | None = None
     chord_gate: float | None = None
+    chord_octave_shift: int | None = None
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
 
 
@@ -121,6 +122,7 @@ class PieceSpec:
     lead_step_bias: float = _PIECE_DEFAULTS["lead_step_bias"]       # probability of choosing ±2 scale degrees from prev
     bass_gate: float = _PIECE_DEFAULTS["bass_gate"]                # bass note length as fraction of beat_len
     chord_gate: float = _PIECE_DEFAULTS["chord_gate"]             # chord note length as fraction of beat_len
+    chord_octave_shift: int = _PIECE_DEFAULTS["chord_octave_shift"]  # octaves below lead for chord voicing
     roles: dict[str, RoleAssignment] = field(default_factory=dict)
     sections: dict[str, SectionSpec] = field(default_factory=dict)
     structure: list[StructureEntry | str] = field(default_factory=list)
@@ -145,6 +147,7 @@ class ResolvedSection:
     lead_step_bias: float
     bass_gate: float
     chord_gate: float
+    chord_octave_shift: int
     roles: dict[str, RoleAssignment]
 
 
@@ -198,6 +201,7 @@ def resolve_section(section, piece):
         lead_step_bias=_inh(section.lead_step_bias, piece.lead_step_bias),
         bass_gate=_inh(section.bass_gate, piece.bass_gate),
         chord_gate=_inh(section.chord_gate, piece.chord_gate),
+        chord_octave_shift=_inh(section.chord_octave_shift, piece.chord_octave_shift),
         roles=roles,
     )
 
@@ -290,7 +294,8 @@ def generate_bass_line(scale_pitches, n_beats, beat_len, rng, gate=0.90):
     return notes
 
 
-def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order):
+def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order,
+                          octave_shift=-2):
     """Return the MIDI pitches of the best chord for a beat, or None.
 
     ``beat_pitches`` are the lead pitches sounding in the beat; ``primary`` is the
@@ -302,7 +307,7 @@ def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions
 
     Sort order: root on lead note first, then diatonic before extension, then full
     triad, then richer chord, then definition order, then root pitch class. The chosen
-    chord is voiced one octave below ``primary``.
+    chord is voiced ``octave_shift`` octaves relative to ``primary`` (negative = below).
     """
     primary_pc = primary % 12
     best = None
@@ -328,13 +333,13 @@ def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions
     if best is None:
         return None
     root, intervals = best
-    base = primary - 12  # sit one octave below the lead
-    root_midi = base - ((base - root) % 12)  # highest pitch <= base with this root pc
+    base = primary + octave_shift * 12  # target reference point for the chord voicing
+    root_midi = base - ((base - root) % 12)  # highest root pitch-class <= base
     return [max(0, root_midi + interval) for interval in intervals]
 
 
 def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len,
-                        scale_name=None, gate=0.85):
+                        scale_name=None, chord_octave_shift=-2, gate=0.85):
     """One chord per beat, chosen to fit the lead notes sounding in that beat.
 
     For each beat, the lead notes overlapping it are collected and
@@ -367,9 +372,11 @@ def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len,
         if primary is None:
             continue
 
-        chord = _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order)
+        chord = _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order,
+                                      chord_octave_shift)
         if chord is None:  # fall back to harmonising just the downbeat note
-            chord = _voice_chord_for_beat([primary], primary, scale_pcs, tonic_pc, extensions, order)
+            chord = _voice_chord_for_beat([primary], primary, scale_pcs, tonic_pc, extensions, order,
+                                          chord_octave_shift)
         if chord is None:
             continue
 
@@ -471,6 +478,7 @@ def render_section(resolved, rng=None):
     accomp_role = resolved.roles[ROLE_ACCOMPANIMENT]
     chord_line = generate_chord_line(lead_line, scale_pitches, n_beats, beat_len,
                                      scale_name=resolved.scale,
+                                     chord_octave_shift=resolved.chord_octave_shift,
                                      gate=resolved.chord_gate) if accomp_role.main else []
     add(accomp_role.main, chord_line)
     for support in accomp_role.supports:

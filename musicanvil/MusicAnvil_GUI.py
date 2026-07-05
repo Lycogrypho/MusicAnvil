@@ -34,6 +34,7 @@ ARTIC_PARAMS = [
     ("lead_step_bias",       "Lead Step Bias (0–1):",  str(_PIECE_DEFAULTS["lead_step_bias"]),       False),
     ("bass_gate",            "Bass Gate (0–1):",       str(_PIECE_DEFAULTS["bass_gate"]),            False),
     ("chord_gate",           "Chord Gate (0–1):",      str(_PIECE_DEFAULTS["chord_gate"]),           False),
+    ("chord_octave_shift",   "Chord Octave Shift:",    str(_PIECE_DEFAULTS["chord_octave_shift"]),   True),
 ]
 
 
@@ -66,12 +67,12 @@ PROJECT_VERSION = 1
 _SECTION_SCALAR_FIELDS = (
     "bars", "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",
     "drums_enabled", "lead_rest_prob", "lead_sustain", "lead_velocity_jitter",
-    "lead_step_bias", "bass_gate", "chord_gate",
+    "lead_step_bias", "bass_gate", "chord_gate", "chord_octave_shift",
 )
 _PIECE_SCALAR_FIELDS = (
     "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",
     "drums_enabled", "lead_rest_prob", "lead_sustain", "lead_velocity_jitter",
-    "lead_step_bias", "bass_gate", "chord_gate",
+    "lead_step_bias", "bass_gate", "chord_gate", "chord_octave_shift",
 )
 
 
@@ -557,16 +558,17 @@ class MusicGeneratorApp:
         override_row(9,  "lead_sustain",         "Override Lead Sustain",  None,  8)
         override_row(10, "lead_velocity_jitter", "Override Vel. Jitter",   None,  6)
         override_row(11, "lead_step_bias",       "Override Step Bias",     None,  8)
-        override_row(12, "bass_gate",            "Override Bass Gate",     None,  8)
-        override_row(13, "chord_gate",           "Override Chord Gate",    None,  8)
+        override_row(12, "bass_gate",            "Override Bass Gate",          None,  8)
+        override_row(13, "chord_gate",           "Override Chord Gate",         None,  8)
+        override_row(14, "chord_octave_shift",   "Override Chord Oct. Shift",   None,  4)
 
         # Drums enabled override (listbox — separate from override_row)
         self._sec_drums_override_var = tk.BooleanVar(value=False)
         tk.Checkbutton(editor, text="Override Drums Enabled",
                        variable=self._sec_drums_override_var).grid(
-            row=14, column=0, sticky="w", padx=5, pady=2)
+            row=15, column=0, sticky="w", padx=5, pady=2)
         dlf, self._sec_drums_lb = _scrolled_listbox(editor, height=4, width=15, selectmode=tk.MULTIPLE)
-        dlf.grid(row=14, column=1, padx=5, pady=2, sticky="w")
+        dlf.grid(row=15, column=1, padx=5, pady=2, sticky="w")
         for name in DRUM_INSTRUMENTS:
             self._sec_drums_lb.insert(tk.END, name)
         self._sec_drums_lb.selection_set(0, tk.END)
@@ -575,13 +577,13 @@ class MusicGeneratorApp:
         self.sec_roles_override_var = tk.BooleanVar(value=False)
         tk.Checkbutton(editor, text="Override Roles",
                        variable=self.sec_roles_override_var).grid(
-            row=15, column=0, sticky="w", padx=5, pady=2)
+            row=16, column=0, sticky="w", padx=5, pady=2)
         roles_holder = tk.Frame(editor)
-        roles_holder.grid(row=16, column=0, columnspan=2, padx=5, pady=3)
+        roles_holder.grid(row=17, column=0, columnspan=2, padx=5, pady=3)
         self.sec_roles = RoleEditor(roles_holder, on_change=self._auto_save_section)
 
         self.sec_duration_label = tk.Label(editor, text="Duration: --:--")
-        self.sec_duration_label.grid(row=17, column=0, columnspan=2, pady=5)
+        self.sec_duration_label.grid(row=18, column=0, columnspan=2, pady=5)
 
         # Wire auto-save to every field
         self.bars_var.trace_add("write", self._auto_save_section)
@@ -768,6 +770,7 @@ class MusicGeneratorApp:
             "lead_step_bias":       spec.lead_step_bias,
             "bass_gate":            spec.bass_gate,
             "chord_gate":           spec.chord_gate,
+            "chord_octave_shift":   spec.chord_octave_shift,
         }
         for key, value in artic_loaders.items():
             check_var, value_var = self.sec_override[key]
@@ -894,6 +897,7 @@ class MusicGeneratorApp:
             lead_step_bias=artic["lead_step_bias"],
             bass_gate=artic["bass_gate"],
             chord_gate=artic["chord_gate"],
+            chord_octave_shift=artic["chord_octave_shift"],
             roles=self.piece_roles.get_roles(),
             sections=dict(self.sections),
             structure=list(self.structure),
