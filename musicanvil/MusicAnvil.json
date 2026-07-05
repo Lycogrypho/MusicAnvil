@@ -22,9 +22,20 @@
     "minor": [0, 3, 7],
     "diminished": [0, 3, 6],
     "augmented": [0, 4, 8],
+    "sus2": [0, 2, 7],
+    "sus4": [0, 5, 7],
+    "major6": [0, 4, 7, 9],
+    "minor6": [0, 3, 7, 9],
     "major7": [0, 4, 7, 11],
     "minor7": [0, 3, 7, 10],
-    "dominant7": [0, 4, 7, 10]
+    "dominant7": [0, 4, 7, 10],
+    "minor_major7": [0, 3, 7, 11],
+    "half_diminished7": [0, 3, 6, 10],
+    "diminished7": [0, 3, 6, 9],
+    "augmented7": [0, 4, 8, 10],
+    "fifth": [0, 7],
+    "major_third": [0, 4],
+    "minor_third": [0, 3]
   },
 
   "drum_pitches": {

@@ -144,6 +144,58 @@ class TestRenderSection(unittest.TestCase):
             MusicAnvil.render_section(self.resolved, self.rng)
 
 
+class TestGenerateChordLine(unittest.TestCase):
+    """The refactored generate_chord_line builds chords from chord_definitions that
+    fit the lead notes and stay within the scale."""
+
+    def setUp(self):
+        self.scale_pitches = [pretty_midi.note_name_to_number(n)
+                              for n in ma_utils.generate_scale("major", "C")]
+        self.scale_pcs = {p % 12 for p in self.scale_pitches}
+        self.beat_len = 0.5
+
+    def _lead(self, *pitches):
+        """One sustained lead note per beat, in order."""
+        return [pretty_midi.Note(velocity=100, pitch=p,
+                                 start=i * self.beat_len, end=(i + 1) * self.beat_len)
+                for i, p in enumerate(pitches)]
+
+    def test_chord_notes_are_diatonic(self):
+        lead = self._lead(72, 74, 76, 77)  # C D E F over four beats
+        chords = MusicAnvil.generate_chord_line(lead, self.scale_pitches, 4, self.beat_len)
+        self.assertGreater(len(chords), 0)
+        for note in chords:
+            self.assertIn(note.pitch % 12, self.scale_pcs)
+
+    def test_chord_contains_the_lead_pitch_class(self):
+        # Each harmonised beat's chord must contain the lead note sounding on it.
+        for pitch in (72, 74, 76, 77, 79, 81, 83):
+            chords = MusicAnvil.generate_chord_line(self._lead(pitch), self.scale_pitches,
+                                                    1, self.beat_len)
+            self.assertTrue(chords, f"no chord produced for lead pitch {pitch}")
+            chord_pcs = {n.pitch % 12 for n in chords}
+            self.assertIn(pitch % 12, chord_pcs)
+
+    def test_c_lead_yields_c_major_triad(self):
+        chords = MusicAnvil.generate_chord_line(self._lead(72), self.scale_pitches, 1, self.beat_len)
+        self.assertEqual({n.pitch % 12 for n in chords}, {0, 4, 7})  # C E G
+
+    def test_chord_voiced_below_lead(self):
+        chords = MusicAnvil.generate_chord_line(self._lead(72), self.scale_pitches, 1, self.beat_len)
+        for note in chords:
+            self.assertLessEqual(note.pitch, 72)
+
+    def test_no_degenerate_chord_at_top_of_scale(self):
+        # ToDo #16: the highest scale pitch used to collapse to a 1-2 note "chord".
+        top = self.scale_pitches[-1]
+        chords = MusicAnvil.generate_chord_line(self._lead(top), self.scale_pitches, 1, self.beat_len)
+        self.assertGreaterEqual(len({n.pitch % 12 for n in chords}), 3)
+
+    def test_beat_without_lead_is_rest(self):
+        chords = MusicAnvil.generate_chord_line([], self.scale_pitches, 4, self.beat_len)
+        self.assertEqual(chords, [])
+
+
 class TestSupportDerivation(unittest.TestCase):
 
     def setUp(self):

@@ -601,6 +601,95 @@ class TestGenerateChordNotes(unittest.TestCase):
             ma_utils.generate_chord_notes("H", "major")
 
 
+class TestChordDefinitionsComplete(unittest.TestCase):
+    """chord_definitions must cover the standard common-practice vocabulary with
+    correct intervals, including the diatonic thirds and the power-chord dyad."""
+
+    EXPECTED = {
+        "major": [0, 4, 7],
+        "minor": [0, 3, 7],
+        "diminished": [0, 3, 6],
+        "augmented": [0, 4, 8],
+        "sus2": [0, 2, 7],
+        "sus4": [0, 5, 7],
+        "major6": [0, 4, 7, 9],
+        "minor6": [0, 3, 7, 9],
+        "major7": [0, 4, 7, 11],
+        "minor7": [0, 3, 7, 10],
+        "dominant7": [0, 4, 7, 10],
+        "minor_major7": [0, 3, 7, 11],
+        "half_diminished7": [0, 3, 6, 10],
+        "diminished7": [0, 3, 6, 9],
+        "augmented7": [0, 4, 8, 10],
+        "fifth": [0, 7],
+        "major_third": [0, 4],
+        "minor_third": [0, 3],
+    }
+
+    def test_all_expected_chords_present_with_correct_intervals(self):
+        for name, intervals in self.EXPECTED.items():
+            self.assertIn(name, ma_utils.chord_definitions)
+            self.assertEqual(ma_utils.chord_definitions[name], intervals,
+                             f"{name} has unexpected intervals")
+
+    def test_intervals_start_on_root_and_ascend(self):
+        for name, intervals in ma_utils.chord_definitions.items():
+            self.assertEqual(intervals[0], 0, f"{name} must start on the root (0)")
+            self.assertEqual(intervals, sorted(intervals), f"{name} must ascend")
+
+    def test_intervals_are_distinct_pitch_classes(self):
+        for name, intervals in ma_utils.chord_definitions.items():
+            pcs = [i % 12 for i in intervals]
+            self.assertEqual(len(pcs), len(set(pcs)), f"{name} has duplicate pitch classes")
+
+
+class TestFindCompatibleChords(unittest.TestCase):
+    """find_compatible_chords returns (root, type) chords containing every beat pitch class."""
+
+    def _beat(self, *pitches):
+        return [pretty_midi.Note(velocity=100, pitch=p, start=0.0, end=0.5) for p in pitches]
+
+    def test_empty_beat_returns_empty(self):
+        self.assertEqual(ma_utils.find_compatible_chords([]), [])
+
+    def test_single_note_includes_root_position_major(self):
+        # C alone: C major (root 0) is one compatible chord among many.
+        result = ma_utils.find_compatible_chords(self._beat(60))
+        self.assertIn((0, "major"), result)
+
+    def test_single_note_includes_chords_where_it_is_not_the_root(self):
+        # C is the minor third of A minor (root 9) and the fifth of F major (root 5).
+        result = ma_utils.find_compatible_chords(self._beat(60))
+        self.assertIn((9, "minor"), result)
+        self.assertIn((5, "major"), result)
+
+    def test_triad_notes_match_that_triad(self):
+        result = ma_utils.find_compatible_chords(self._beat(60, 64, 67))  # C E G
+        self.assertIn((0, "major"), result)
+
+    def test_incompatible_chord_excluded(self):
+        # C + E (major third) cannot be a C minor chord (needs Eb, not E).
+        result = ma_utils.find_compatible_chords(self._beat(60, 64))
+        self.assertNotIn((0, "minor"), result)
+        self.assertIn((0, "major"), result)
+        self.assertIn((0, "major_third"), result)
+
+    def test_every_returned_chord_actually_contains_all_pitch_classes(self):
+        beat_pcs = {60 % 12, 64 % 12, 67 % 12}
+        for root, chord_type in ma_utils.find_compatible_chords(self._beat(60, 64, 67)):
+            chord_pcs = {(root + i) % 12 for i in ma_utils.chord_definitions[chord_type]}
+            self.assertTrue(beat_pcs <= chord_pcs)
+
+    def test_accepts_raw_pitch_integers(self):
+        result = ma_utils.find_compatible_chords([60, 64, 67])
+        self.assertIn((0, "major"), result)
+
+    def test_octave_does_not_matter(self):
+        low = ma_utils.find_compatible_chords(self._beat(60, 64, 67))
+        high = ma_utils.find_compatible_chords(self._beat(72, 76, 79))
+        self.assertEqual(low, high)
+
+
 class TestAdaptDrumLineVelocityScaling(unittest.TestCase):
     """P3 #6 — adapt_drum_line edge case: velocity_scaling_factor=0 (all velocities → 0)."""
 

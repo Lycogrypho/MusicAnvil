@@ -206,6 +206,39 @@ def generate_chord_notes(note_name, chord_type):
     return [notes_in_octave[(tonic_index + interval) % 12] for interval in intervals]
 
 
+def find_compatible_chords(beat, chord_defs=None):
+    """Return every chord from ``chord_definitions`` compatible with the notes in *beat*.
+
+    A chord is *compatible* when every distinct pitch class present in the beat is one
+    of the chord's pitch classes at the given root — i.e. all the beat's notes can be
+    heard as tones of that chord.
+
+    Parameters:
+    - beat: an iterable of ``pretty_midi.Note`` objects (or raw MIDI pitch integers) —
+      the notes sounding across one beat.
+    - chord_defs: chord name → interval list mapping. Defaults to ``chord_definitions``.
+
+    Returns a list of ``(root, chord_type)`` tuples, where ``root`` is a pitch class
+    (0–11) and ``chord_type`` is a key of ``chord_defs``. The order is deterministic:
+    by chord-definition order, then ascending root. An empty beat yields an empty list.
+    """
+    defs = chord_definitions if chord_defs is None else chord_defs
+    pitch_classes = set()
+    for item in beat:
+        pitch = item.pitch if hasattr(item, "pitch") else item
+        pitch_classes.add(pitch % 12)
+    if not pitch_classes:
+        return []
+
+    compatible = []
+    for chord_type, intervals in defs.items():
+        for root in range(12):
+            chord_pitch_classes = {(root + interval) % 12 for interval in intervals}
+            if pitch_classes <= chord_pitch_classes:
+                compatible.append((root, chord_type))
+    return compatible
+
+
 # Beat generation mode constants.
 BEAT_MODE_FIXED_16TH = 1   # Fixed 16th-note grid: rich sub-beat variety regardless of signature
 BEAT_MODE_HALF_DENOM = 2   # Half the denominator unit: sub-beat variety that respects the signature

@@ -13,8 +13,9 @@ Generation layers per section:
   a) drum line — the genre pattern repeated to fill the section
   b) bass line — random notes from the scale, two octaves down, one per beat
   c) lead line — random notes from the scale, 1-2 beats each
-  d) accompaniment — one diatonic chord per beat, rooted on the lead note sounding
-     at that beat (thirds stacked within the scale)
+  d) accompaniment — one chord per beat, selected from ma_utils.chord_definitions to
+     fit the lead notes sounding in that beat (via find_compatible_chords), kept within
+     the scale and voiced an octave below the lead
   e) support instruments — partial replicas of their role's main line (lead supports
      play only even beats, accompaniment supports only the first half of each bar,
      bass supports only the first beat of each bar)
@@ -288,28 +289,79 @@ def generate_bass_line(scale_pitches, n_beats, beat_len, rng, gate=0.90):
     return notes
 
 
-def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len, gate=0.85):
-    """One diatonic chord per beat, rooted on the lead note sounding at that beat.
+def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, order):
+    """Return the MIDI pitches of the best diatonic chord for a beat, or None.
 
-    The chord is built by stacking thirds within the scale (scale degrees i, i+2,
-    i+4) and dropped one octave so it sits under the lead. Beats where no lead
-    note sounds are rests.  ``gate`` shortens each chord to that fraction of the
-    beat so successive chords breathe rather than collide.
+    ``beat_pitches`` are the lead pitches sounding in the beat; ``primary`` is the
+    pitch on the downbeat (the preferred root). Candidate chords come from
+    ``ma_utils.find_compatible_chords`` and are restricted to those whose tones all
+    fall within ``scale_pcs`` (the section scale's pitch classes), keeping the
+    accompaniment diatonic. The winner is rooted on the lead note where possible,
+    prefers a full triad, then richer chords, with ``order`` (chord-definition order)
+    as a stable tie-break. The chosen chord is voiced one octave below ``primary``.
     """
+    primary_pc = primary % 12
+    best = None
+    best_key = None
+    for root, chord_type in ma_utils.find_compatible_chords(beat_pitches):
+        intervals = ma_utils.chord_definitions[chord_type]
+        chord_pcs = {(root + interval) % 12 for interval in intervals}
+        if not chord_pcs <= scale_pcs:  # keep the accompaniment in key
+            continue
+        key = (
+            0 if root == primary_pc else 1,   # prefer a chord rooted on the lead note
+            0 if len(intervals) == 3 else 1,  # prefer a full triad
+            -len(intervals),                  # then richer chords (7ths over thirds)
+            order.get(chord_type, len(order)),
+            root,
+        )
+        if best_key is None or key < best_key:
+            best_key, best = key, (root, intervals)
+
+    if best is None:
+        return None
+    root, intervals = best
+    base = primary - 12  # sit one octave below the lead
+    root_midi = base - ((base - root) % 12)  # highest pitch <= base with this root pc
+    return [max(0, root_midi + interval) for interval in intervals]
+
+
+def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len, gate=0.85):
+    """One diatonic chord per beat, chosen to fit the lead notes sounding in that beat.
+
+    For each beat, the lead notes overlapping it are collected and
+    ``ma_utils.find_compatible_chords`` returns every chord from
+    ``ma_utils.chord_definitions`` whose tones contain those notes. Candidates are
+    restricted to chords that stay within the section scale, and the best is picked —
+    rooted on the lead note where possible, preferring a full triad — then voiced one
+    octave below the lead (see ``_voice_chord_for_beat``). If the full set of beat
+    notes has no diatonic match, the beat's downbeat note alone is harmonised; beats
+    with no lead note at all are rests. ``gate`` shortens each chord so successive
+    chords breathe rather than collide.
+    """
+    scale_pcs = {pitch % 12 for pitch in scale_pitches}
+    order = {name: index for index, name in enumerate(ma_utils.chord_definitions)}
     notes = []
     for beat in range(n_beats):
         t = beat * beat_len
-        root = None
+        primary = None
+        beat_pitches = []
         for note in lead_notes:
-            if note.start <= t + 1e-9 < note.end:
-                root = note.pitch
-                break
-        if root is None or root not in scale_pitches:
+            if note.start < t + beat_len - 1e-9 and note.end > t + 1e-9:
+                beat_pitches.append(note.pitch)
+                if primary is None and note.start <= t + 1e-9 < note.end:
+                    primary = note.pitch
+        if primary is None:
             continue
-        i = scale_pitches.index(root)
-        chord = {scale_pitches[min(i + step, len(scale_pitches) - 1)] for step in (0, 2, 4)}
+
+        chord = _voice_chord_for_beat(beat_pitches, primary, scale_pcs, order)
+        if chord is None:  # fall back to harmonising just the downbeat note
+            chord = _voice_chord_for_beat([primary], primary, scale_pcs, order)
+        if chord is None:
+            continue
+
         for pitch in chord:
-            notes.append(pretty_midi.Note(velocity=VELOCITY_CHORD, pitch=max(0, pitch - 12),
+            notes.append(pretty_midi.Note(velocity=VELOCITY_CHORD, pitch=pitch,
                                           start=t, end=t + beat_len * gate))
     return notes
 

@@ -310,7 +310,24 @@ chord = ma_utils.generate_chord_notes("C", "major")
 chord = ma_utils.generate_chord_notes("A", "minor7")
 ```
 
-Available chord types: `major`, `minor`, `diminished`, `augmented`, `major7`, `minor7`, `dominant7`.
+Available chord types:
+
+- **Triads** — `major`, `minor`, `diminished`, `augmented`
+- **Suspended** — `sus2`, `sus4`
+- **Sixths** — `major6`, `minor6`
+- **Sevenths** — `major7`, `minor7`, `dominant7`, `minor_major7`, `half_diminished7`, `diminished7`, `augmented7`
+- **Dyads** — `fifth` (power chord), `major_third`, `minor_third` (the diatonic thirds)
+
+#### Matching chords to a set of notes
+
+`find_compatible_chords` returns every chord from `chord_definitions` whose tones contain all the pitch classes present in a beat (a list of `pretty_midi.Note` objects or raw MIDI pitch numbers). This is what the engine's accompaniment generator uses to pick a chord that fits the melody:
+
+```python
+# Which chords contain both C and E?  → [(0, "major"), (9, "minor"), (0, "augmented"), ...]
+ma_utils.find_compatible_chords([60, 64])
+```
+
+Each result is a `(root, chord_type)` pair where `root` is a pitch class (0–11).
 
 ### Random Beat Generation
 
