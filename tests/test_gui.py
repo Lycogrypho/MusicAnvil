@@ -9,7 +9,7 @@ tkinter is mocked so these tests run headless.
 import json
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 
 def _patched_tk():
@@ -253,6 +253,105 @@ class TestProjectSerialization(unittest.TestCase):
         gui = self._gui()
         with self.assertRaises(ValueError):
             gui.project_dict_to_piece({"foo": "bar"})
+
+
+class TestTempoValidationError(unittest.TestCase):
+    """P3 #19 — _current_piece_spec must raise an informative error for non-integer tempo."""
+
+    def _make_app(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            return gui_mod, app
+
+    def test_non_integer_tempo_raises_value_error(self):
+        _, app = self._make_app()
+        app.tempo_var.get = MagicMock(return_value="120.5")
+        with self.assertRaises(ValueError):
+            app._current_piece_spec()
+
+    def test_non_integer_tempo_error_mentions_bpm(self):
+        _, app = self._make_app()
+        app.tempo_var.get = MagicMock(return_value="fast")
+        with self.assertRaises(ValueError) as ctx:
+            app._current_piece_spec()
+        self.assertIn("BPM", str(ctx.exception))
+
+    def test_non_integer_tempo_error_mentions_whole_number(self):
+        _, app = self._make_app()
+        app.tempo_var.get = MagicMock(return_value="120.5")
+        with self.assertRaises(ValueError) as ctx:
+            app._current_piece_spec()
+        msg = str(ctx.exception).lower()
+        self.assertIn("whole", msg)
+
+    def test_integer_tempo_does_not_raise_on_parse(self):
+        _, app = self._make_app()
+        app.tempo_var.get = MagicMock(return_value="120")
+        app.signature_var.get = MagicMock(return_value="4/4")
+        app.scale_var.get = MagicMock(return_value="major")
+        app.tonic_var.get = MagicMock(return_value="C")
+        app.tonic_octave_var.get = MagicMock(return_value="4")
+        try:
+            app._current_piece_spec(require_lead=False)
+        except ValueError as exc:
+            if "BPM" in str(exc) or "whole" in str(exc).lower():
+                self.fail(f"_current_piece_spec raised tempo-parse error for valid integer: {exc}")
+
+
+class TestGenerateSaveDialog(unittest.TestCase):
+    """P3 #17 — _generate must use a save-file dialog instead of writing to CWD."""
+
+    def _make_app(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            return gui_mod, app
+
+    def _patch_piece_spec(self, app):
+        """Return a context manager that makes _current_piece_spec return a valid mock piece."""
+        mock_piece = MagicMock()
+        mock_piece.structure = [MagicMock()]
+        return patch.object(app, "_current_piece_spec", return_value=mock_piece)
+
+    def test_generate_calls_save_dialog(self):
+        gui_mod, app = self._make_app()
+        gui_mod.filedialog.asksaveasfilename = MagicMock(return_value="")
+        with self._patch_piece_spec(app):
+            app._generate()
+        gui_mod.filedialog.asksaveasfilename.assert_called_once()
+
+    def test_generate_cancelled_dialog_does_not_call_render(self):
+        """If the user cancels the dialog (returns ''), render_piece must not be called."""
+        gui_mod, app = self._make_app()
+        gui_mod.filedialog.asksaveasfilename = MagicMock(return_value="")
+        import musicanvil.MusicAnvil as MA
+        with patch.object(MA, "render_piece") as mock_render:
+            with self._patch_piece_spec(app):
+                app._generate()
+            mock_render.assert_not_called()
+
+    def test_generate_writes_to_dialog_path(self):
+        """MIDI must be written to the path returned by the save dialog."""
+        gui_mod, app = self._make_app()
+        expected_path = "/tmp/test_song.mid"
+        gui_mod.filedialog.asksaveasfilename = MagicMock(return_value=expected_path)
+        import musicanvil.MusicAnvil as MA
+        mock_midi = MagicMock()
+        with patch.object(MA, "render_piece", return_value=mock_midi):
+            with self._patch_piece_spec(app):
+                app._generate()
+        mock_midi.write.assert_called_once_with(expected_path)
+
+    def test_generate_dialog_uses_default_filename_as_initial(self):
+        """The dialog's initialfile must match the filename entry widget."""
+        gui_mod, app = self._make_app()
+        gui_mod.filedialog.asksaveasfilename = MagicMock(return_value="")
+        app.filename_var.get = MagicMock(return_value="my_song")
+        with self._patch_piece_spec(app):
+            app._generate()
+        kwargs = gui_mod.filedialog.asksaveasfilename.call_args.kwargs
+        self.assertEqual(kwargs.get("initialfile"), "my_song.mid")
 
 
 if __name__ == "__main__":

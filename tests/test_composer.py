@@ -579,5 +579,85 @@ class TestDrumPatternTiling(unittest.TestCase):
                                  f"Drum note ends at {note.end}, beyond section length {section_len}")
 
 
+class TestTempoChangeEvents(unittest.TestCase):
+    """P3 #15 — render_piece must write MIDI tempo-change events at section boundaries."""
+
+    def _make_two_section_piece(self, tempo_a=120, tempo_b=200):
+        piece = MusicAnvil.PieceSpec(
+            tempo=tempo_a,
+            signature=(4, 4),
+            rhythm="Rock",
+            scale="major",
+            tonic="C",
+            roles={
+                MusicAnvil.ROLE_LEAD: MusicAnvil.RoleAssignment(main="Piano"),
+                MusicAnvil.ROLE_ACCOMPANIMENT: MusicAnvil.RoleAssignment(),
+                MusicAnvil.ROLE_BASS: MusicAnvil.RoleAssignment(),
+            },
+            sections={
+                "A": MusicAnvil.SectionSpec(name="A", bars=2),
+                "B": MusicAnvil.SectionSpec(name="B", bars=2, tempo=tempo_b),
+            },
+            structure=["A", "B"],
+        )
+        return piece
+
+    def test_single_tempo_piece_has_one_tempo_event(self):
+        piece = _make_piece(structure=["A"], bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        _, tempos = midi.get_tempo_changes()
+        self.assertEqual(len(tempos), 1)
+        self.assertAlmostEqual(tempos[0], 120.0, places=1)
+
+    def test_tempo_change_event_written_for_section_override(self):
+        piece = self._make_two_section_piece(tempo_a=120, tempo_b=200)
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        _, tempos = midi.get_tempo_changes()
+        self.assertIn(True, [abs(t - 120.0) < 0.5 for t in tempos],
+                      "Expected a 120 BPM tempo event")
+        self.assertIn(True, [abs(t - 200.0) < 0.5 for t in tempos],
+                      "Expected a 200 BPM tempo event")
+
+    def test_tempo_change_occurs_at_correct_time(self):
+        piece = self._make_two_section_piece(tempo_a=120, tempo_b=200)
+        section_a_len = MusicAnvil.section_seconds(2, 120, (4, 4))
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        times, tempos = midi.get_tempo_changes()
+        change_times_for_200 = [t for t, bpm in zip(times, tempos) if abs(bpm - 200.0) < 0.5]
+        self.assertEqual(len(change_times_for_200), 1)
+        self.assertAlmostEqual(change_times_for_200[0], section_a_len, places=2)
+
+    def test_matching_tempo_sections_produce_one_event(self):
+        """When every section shares the piece tempo, only the initial event is written."""
+        piece = _make_piece(structure=["A", "A"], bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        _, tempos = midi.get_tempo_changes()
+        self.assertEqual(len(tempos), 1)
+
+    def test_tempo_reverting_to_piece_default_writes_event(self):
+        piece = MusicAnvil.PieceSpec(
+            tempo=120,
+            signature=(4, 4),
+            rhythm="Rock",
+            scale="major",
+            tonic="C",
+            roles={
+                MusicAnvil.ROLE_LEAD: MusicAnvil.RoleAssignment(main="Piano"),
+                MusicAnvil.ROLE_ACCOMPANIMENT: MusicAnvil.RoleAssignment(),
+                MusicAnvil.ROLE_BASS: MusicAnvil.RoleAssignment(),
+            },
+            sections={
+                "A": MusicAnvil.SectionSpec(name="A", bars=2),
+                "B": MusicAnvil.SectionSpec(name="B", bars=2, tempo=200),
+                "C": MusicAnvil.SectionSpec(name="C", bars=2),
+            },
+            structure=["A", "B", "C"],
+        )
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        _, tempos = midi.get_tempo_changes()
+        # Three distinct tempo events: 120 → 200 → 120
+        self.assertEqual(len(tempos), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

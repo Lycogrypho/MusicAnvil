@@ -1,0 +1,8 @@
+# Pinned transitive dependencies for reproducible installs.
+# Generated from: .venv\Scripts\pip freeze
+# Regenerate with: .venv\Scripts\pip freeze | grep -E "mido|numpy|pretty_midi|six|importlib_resources"
+importlib_resources==7.1.0
+mido==1.3.3
+numpy==2.1.3
+pretty_midi==0.2.11
+six==1.17.0

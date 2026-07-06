@@ -773,5 +773,115 @@ class TestChordPaletteExtensions(unittest.TestCase):
         self.assertIn((7, "dominant7"), blues_ext, "blues missing V dominant7 extension")
 
 
+class TestGenerateScaleNumOctaves(unittest.TestCase):
+    """P3 #8 — generate_scale num_octaves parameter controls the number of octaves spanned."""
+
+    def test_default_three_octaves_major(self):
+        notes = ma_utils.generate_scale("major", "C")
+        self.assertEqual(len(notes), 21)  # 7 notes × 3 octaves
+
+    def test_one_octave_major(self):
+        notes = ma_utils.generate_scale("major", "C", num_octaves=1)
+        self.assertEqual(len(notes), 7)
+
+    def test_two_octaves_major(self):
+        notes = ma_utils.generate_scale("major", "C", num_octaves=2)
+        self.assertEqual(len(notes), 14)
+
+    def test_four_octaves_major(self):
+        notes = ma_utils.generate_scale("major", "C", num_octaves=4)
+        self.assertEqual(len(notes), 28)
+
+    def test_one_octave_starts_and_ends_on_tonic(self):
+        notes = ma_utils.generate_scale("major", "C", num_octaves=1)
+        self.assertEqual(notes[0], "C4")
+        self.assertEqual(notes[-1], "B4")
+
+    def test_two_octaves_second_octave_continues_from_first(self):
+        notes_1 = ma_utils.generate_scale("major", "C", num_octaves=1)
+        notes_2 = ma_utils.generate_scale("major", "C", num_octaves=2)
+        self.assertEqual(notes_2[:7], notes_1)
+        self.assertEqual(notes_2[7], "C5")
+
+    def test_pitches_strictly_ascending_for_any_num_octaves(self):
+        for n in (1, 2, 4):
+            notes = ma_utils.generate_scale("major", "C", num_octaves=n)
+            pitches = [pretty_midi.note_name_to_number(note) for note in notes]
+            self.assertEqual(pitches, sorted(pitches),
+                             f"Pitches not ascending for num_octaves={n}")
+
+    def test_zero_num_octaves_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.generate_scale("major", "C", num_octaves=0)
+
+
+class TestGenerateRandomBeatVelocity(unittest.TestCase):
+    """P3 #18 — generate_random_beat velocity and velocity_jitter parameters."""
+
+    NOTES = [60, 62, 64, 65, 67]
+
+    def test_default_velocity_is_100(self):
+        random.seed(0)
+        notes = ma_utils.generate_random_beat(self.NOTES, tempo=120, beat_duration=2.0)
+        self.assertTrue(all(n.velocity == 100 for n in notes),
+                        "Default velocity should be 100 with no jitter")
+
+    def test_custom_velocity_applied(self):
+        random.seed(0)
+        notes = ma_utils.generate_random_beat(self.NOTES, tempo=120, beat_duration=2.0,
+                                              velocity=80)
+        self.assertTrue(all(n.velocity == 80 for n in notes),
+                        "Custom velocity=80 should be used for all notes")
+
+    def test_velocity_jitter_produces_variation(self):
+        random.seed(42)
+        notes = ma_utils.generate_random_beat(self.NOTES, tempo=120, beat_duration=4.0,
+                                              velocity_jitter=20)
+        velocities = {n.velocity for n in notes}
+        self.assertGreater(len(velocities), 1, "Jitter should produce at least 2 distinct velocities")
+
+    def test_velocity_jitter_stays_in_valid_range(self):
+        random.seed(0)
+        notes = ma_utils.generate_random_beat(self.NOTES, tempo=120, beat_duration=4.0,
+                                              velocity=100, velocity_jitter=50)
+        for note in notes:
+            self.assertGreaterEqual(note.velocity, 1)
+            self.assertLessEqual(note.velocity, 127)
+
+    def test_zero_jitter_gives_constant_velocity(self):
+        random.seed(0)
+        notes = ma_utils.generate_random_beat(self.NOTES, tempo=120, beat_duration=2.0,
+                                              velocity=90, velocity_jitter=0)
+        self.assertTrue(all(n.velocity == 90 for n in notes))
+
+
+class TestMetalPunkRockPatterns(unittest.TestCase):
+    """P3 #20 — Metal and Punk Rock drum patterns must be distinct."""
+
+    def test_metal_and_punk_rock_differ(self):
+        metal = ma_utils.drum_lines.get("Metal")
+        punk = ma_utils.drum_lines.get("Punk Rock")
+        self.assertIsNotNone(metal, "'Metal' must be in drum_lines")
+        self.assertIsNotNone(punk, "'Punk Rock' must be in drum_lines")
+        self.assertNotEqual(metal, punk,
+                            "Metal and Punk Rock must have different drum patterns")
+
+    def test_metal_has_crash_cymbal(self):
+        metal = ma_utils.drum_lines["Metal"]
+        crash_pitch = ma_utils.drum_pitches.get("Crash Cymbal")
+        self.assertIsNotNone(crash_pitch)
+        pitches = [entry[1] for entry in metal]
+        self.assertIn(crash_pitch, pitches,
+                      "Metal pattern should include a crash cymbal for distinction")
+
+    def test_metal_has_double_kick(self):
+        metal = ma_utils.drum_lines["Metal"]
+        bass_pitch = ma_utils.drum_pitches["Bass Drum"]
+        kicks = sorted(entry[2] for entry in metal if entry[1] == bass_pitch)
+        # Double kick = two consecutive kicks with a gap ≤ 0.5 beats
+        has_double = any(b - a <= 0.5 for a, b in zip(kicks, kicks[1:]))
+        self.assertTrue(has_double, "Metal pattern should contain a double-kick figure")
+
+
 if __name__ == "__main__":
     unittest.main()

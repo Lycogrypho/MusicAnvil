@@ -24,6 +24,7 @@ Generation layers per section:
 
 # OopCompanion:suppressRename
 
+import bisect
 import random
 from dataclasses import dataclass, field
 
@@ -487,11 +488,29 @@ def render_section(resolved, rng=None):
     return tracks, length
 
 
+def _insert_midi_tempo_change(midi_data, time_seconds, tempo_bpm):
+    """Insert a MIDI tempo-change event at ``time_seconds`` with ``tempo_bpm`` BPM.
+
+    Updates both ``midi_data._tick_scales`` (used by ``write()``) and the internal
+    tick→time lookup table so subsequent ``time_to_tick`` calls remain accurate.
+    """
+    resolution = midi_data.resolution
+    tick = midi_data.time_to_tick(time_seconds)
+    new_tick_scale = 60.0 / (tempo_bpm * resolution)
+    keys = [ts[0] for ts in midi_data._tick_scales]
+    idx = bisect.bisect_left(keys, tick)
+    midi_data._tick_scales.insert(idx, (tick, new_tick_scale))
+    current_max = len(midi_data._PrettyMIDI__tick_to_time) - 1
+    midi_data._update_tick_to_time(max(current_max, tick + 1))
+
+
 def render_piece(piece, rng=None):
     """Render the whole piece into a ``pretty_midi.PrettyMIDI`` object.
 
     Each library section is rendered once and reused verbatim at every occurrence
-    in the structure, so repeats are identical.
+    in the structure, so repeats are identical. When a section's resolved tempo
+    differs from the preceding section, a MIDI tempo-change event is inserted at
+    the section boundary so sequencers display correct bar/beat positions.
     """
     rng = rng if rng is not None else random.Random()
     if not piece.structure:
@@ -501,13 +520,18 @@ def render_piece(piece, rng=None):
     rendered = {}
     combined = {}
     offset = 0.0
+    prev_tempo = piece.tempo
+
     for item in piece.structure:
         entry = _as_entry(item)
         if entry.section not in piece.sections:
             raise ValueError(f"Section '{entry.section}' is not in the section library.")
+        resolved = resolve_section(piece.sections[entry.section], piece)
+        if resolved.tempo != prev_tempo:
+            _insert_midi_tempo_change(midi_data, offset, resolved.tempo)
+            prev_tempo = resolved.tempo
         if entry.section not in rendered:
-            rendered[entry.section] = render_section(
-                resolve_section(piece.sections[entry.section], piece), rng)
+            rendered[entry.section] = render_section(resolved, rng)
         tracks, length = rendered[entry.section]
         if entry.transformer is not None:
             fn = ma_utils.get_transformer(entry.transformer)

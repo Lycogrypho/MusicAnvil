@@ -1,6 +1,7 @@
 import json
 import os
 import random
+from typing import Optional
 
 import pretty_midi
 
@@ -15,7 +16,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FI
 _config_cache = None
 
 
-def load_config(path=None, force_reload=False):
+def load_config(path: Optional[str] = None, force_reload: bool = False) -> dict:
     """Read the MusicAnvil.json configuration file and return it as a dict.
 
     The parsed configuration is cached after the first read; pass
@@ -46,7 +47,7 @@ def load_config(path=None, force_reload=False):
     return config
 
 
-def get_param(*keys, default=None):
+def get_param(*keys: str, default=None):
     """Return a nested configuration value, e.g. ``get_param('piece_defaults', 'tempo')``.
 
     Returns ``default`` if any key along the path is missing.
@@ -98,7 +99,8 @@ def get_notes_from_multiple_instruments():
     return instrument_notes
 
 
-def write_notes_to_midi(notes, midi_file_path, instrument=None):
+def write_notes_to_midi(notes: list, midi_file_path: str,
+                        instrument: Optional[pretty_midi.Instrument] = None) -> None:
     """Write a list of pretty_midi.Note objects to a MIDI file.
 
     If no instrument is supplied, an Acoustic Grand Piano (program 0) is used. A fresh
@@ -120,7 +122,7 @@ def write_notes_to_midi(notes, midi_file_path, instrument=None):
     midi_data.write(midi_file_path)
 
 
-def write_instruments_to_midi(instrument_notes, midi_file_path):
+def write_instruments_to_midi(instrument_notes: dict, midi_file_path: str) -> None:
     """Write a dict of {instrument_name: [Note, ...]} to a MIDI file."""
     midi_data = pretty_midi.PrettyMIDI()
     for instrument_name, notes in instrument_notes.items():
@@ -173,23 +175,27 @@ drum_lines = _CONFIG["drum_lines"]
 chord_palette_extensions = _CONFIG["chord_palette_extensions"]
 
 
-def generate_scale(scale_name, tonic, start_octave=4):
-    """Return the note names of a scale over three octaves starting at *start_octave*.
+def generate_scale(scale_name: str, tonic: str, start_octave: int = 4,
+                   num_octaves: int = 3) -> list:
+    """Return the note names of a scale over *num_octaves* octaves starting at *start_octave*.
 
     Parameters:
     - scale_name: Key in ``scale_definitions`` (case-insensitive).
     - tonic: Root note name from ``notes_in_octave`` (e.g. "C", "F#").
     - start_octave: The octave number of the lowest root note (default 4 → C4).
+    - num_octaves: Number of octaves to span (default 3).
     """
     intervals = scale_definitions.get(scale_name.lower())
     if intervals is None:
         raise ValueError(f"Scale '{scale_name}' is not defined.")
     if tonic not in notes_in_octave:
         raise ValueError(f"Tonic '{tonic}' is not a valid note name.")
+    if num_octaves < 1:
+        raise ValueError(f"num_octaves must be at least 1, got {num_octaves}.")
 
     tonic_index = notes_in_octave.index(tonic)
     scale_notes = []
-    for octave in range(3):
+    for octave in range(num_octaves):
         for interval in intervals:
             semitone = tonic_index + interval + octave * 12
             note_name = notes_in_octave[semitone % 12]
@@ -198,7 +204,7 @@ def generate_scale(scale_name, tonic, start_octave=4):
     return scale_notes
 
 
-def generate_chord_notes(note_name, chord_type):
+def generate_chord_notes(note_name: str, chord_type: str) -> list:
     """Return the note names belonging to a chord built on the given tonic."""
     intervals = chord_definitions.get(chord_type.lower())
     if intervals is None:
@@ -210,7 +216,7 @@ def generate_chord_notes(note_name, chord_type):
     return [notes_in_octave[(tonic_index + interval) % 12] for interval in intervals]
 
 
-def find_compatible_chords(beat, chord_defs=None):
+def find_compatible_chords(beat: list, chord_defs: Optional[dict] = None) -> list:
     """Return every chord from ``chord_definitions`` compatible with the notes in *beat*.
 
     A chord is *compatible* when every distinct pitch class present in the beat is one
@@ -269,7 +275,9 @@ def _beat_sub_unit(tempo, time_signature, mode):
     )
 
 
-def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_duration=4, mode=BEAT_MODE_FIXED_16TH):
+def generate_random_beat(available_notes: list, tempo: float, time_signature: tuple = (4, 4),
+                         beat_duration: float = 4, mode: int = BEAT_MODE_FIXED_16TH,
+                         velocity: int = 100, velocity_jitter: int = 0) -> list:
     """Generate a random beat as a list of pretty_midi.Note objects.
 
     Notes and rests are placed sequentially (80% note / 20% rest), each lasting an
@@ -284,6 +292,9 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
     - mode: Beat generation mode (``BEAT_MODE_FIXED_16TH`` or ``BEAT_MODE_HALF_DENOM``).
       Mode 1 uses a fixed 16th-note grid for maximum rhythmic variety.
       Mode 2 halves the denominator unit, preserving the time-signature character.
+    - velocity: Base MIDI velocity for generated notes (1–127, default 100).
+    - velocity_jitter: Max ±random offset applied to each note's velocity (default 0).
+      Pass a positive value (e.g. 10) for natural dynamic variation.
 
     Returns a list of pretty_midi.Note objects.
     """
@@ -302,7 +313,9 @@ def generate_random_beat(available_notes, tempo, time_signature=(4, 4), beat_dur
         duration = random.randint(1, max_mult) * base_duration
         if random.random() < 0.8:  # 80% chance of a note, 20% chance of a rest
             note_number = random.choice(available_notes)
-            beat_notes.append(pretty_midi.Note(velocity=100, pitch=note_number,
+            jitter = random.randint(-velocity_jitter, velocity_jitter) if velocity_jitter > 0 else 0
+            vel = max(1, min(127, velocity + jitter))
+            beat_notes.append(pretty_midi.Note(velocity=vel, pitch=note_number,
                                                start=total_duration, end=total_duration + duration))
         total_duration += duration
 
@@ -378,7 +391,7 @@ def get_transformer(name):
     return fn
 
 
-def adapt_drum_line(drum_line, tempo, velocity_scaling_factor=1.0):
+def adapt_drum_line(drum_line: list, tempo: float, velocity_scaling_factor: float = 1.0) -> list:
     """Convert a beat-relative drum line to absolute seconds at the given tempo.
 
     Parameters:

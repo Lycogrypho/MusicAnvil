@@ -878,7 +878,10 @@ class MusicGeneratorApp:
         return result
 
     def _current_piece_spec(self, require_lead=True):
-        tempo = int(self.tempo_var.get())
+        try:
+            tempo = int(self.tempo_var.get())
+        except ValueError:
+            raise ValueError("Tempo must be a whole number of BPM.")
         if tempo <= 0:
             raise ValueError("Tempo must be a positive number.")
         artic = self._parse_artic()
@@ -911,13 +914,21 @@ class MusicGeneratorApp:
             piece = self._current_piece_spec()
             if not piece.structure:
                 raise ValueError("The piece structure is empty — add at least one section.")
-            filename = self.filename_var.get().strip() or _GUI["default_filename"]
-            if not filename.endswith(".mid"):
-                filename += ".mid"
+            default_name = self.filename_var.get().strip() or _GUI["default_filename"]
+            if not default_name.endswith(".mid"):
+                default_name += ".mid"
+            path = filedialog.asksaveasfilename(
+                title="Save MIDI File",
+                defaultextension=".mid",
+                filetypes=[("MIDI files", "*.mid"), ("All files", "*.*")],
+                initialfile=default_name,
+            )
+            if not path:
+                return
             midi_data = MusicAnvil.render_piece(piece)
-            midi_data.write(filename)
+            midi_data.write(path)
             total = MusicAnvil.piece_seconds(piece)
-            messagebox.showinfo("Done", f"MIDI saved to {filename} ({fmt_mmss(total)})")
+            messagebox.showinfo("Done", f"MIDI saved to {path} ({fmt_mmss(total)})")
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
 

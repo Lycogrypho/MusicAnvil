@@ -14,10 +14,13 @@ And it needs no Artificial Intelligence to do so...
 ## Requirements
 
 - Python 3.13
-- `pretty_midi`
+- `pretty_midi` and its transitive dependencies
+
+Install from the project root (exact versions pinned in `requirements-lock.txt`):
 
 ```
-pip install pretty_midi
+pip install -r requirements.txt           # minimum — only pretty_midi pinned
+pip install -r requirements-lock.txt      # reproducible — all transitive deps pinned
 ```
 
 ## Architecture
@@ -139,7 +142,7 @@ Builds the ordered list of section occurrences that makes up the full piece.
   - `invert` — reflects pitches around the first note, producing a mirror-image melody.
 - **Remove**, **Move Up**, **Move Down** to reorganise.
 - The **Total duration** label updates live as the structure changes.
-- **Generate** renders the piece and writes the `.mid` file.
+- **Generate** renders the piece; a save-file dialog lets you choose where the `.mid` file is written. Closing the dialog cancels without writing.
 
 The same library section played multiple times is rendered once and reused identically at every occurrence (consistent repetition). The same section with different transformers applied produces distinct music each time.
 
@@ -184,6 +187,8 @@ piece = MusicAnvil.PieceSpec(
 midi_data = MusicAnvil.render_piece(piece)
 midi_data.write("song.mid")
 ```
+
+When a section's resolved tempo differs from the piece default, `render_piece` inserts a MIDI tempo-change event at the section boundary so that sequencers and notation editors display correct bar and beat positions across the whole file.
 
 ### Section overrides
 
@@ -231,7 +236,7 @@ Drum tracks are never modified by a transformer.
 
 ### Tonic octave
 
-`tonic_octave` controls which register the scale starts from. The default is 4 (middle C = C4). The scale is generated over three octaves from that starting point.
+`tonic_octave` controls which register the scale starts from. The default is 4 (middle C = C4). The scale spans three octaves from that starting point by default; pass `num_octaves` to `generate_scale` to control the range explicitly.
 
 ```python
 piece.tonic_octave = 3   # darker, lower register
@@ -294,13 +299,17 @@ from musicanvil import ma_utils
 ### Scales
 
 ```python
-# Returns note name strings over 3 octaves (e.g. ["C4", "D4", "E4", ...])
-notes = ma_utils.generate_scale("major", "C")
+# Returns note name strings (e.g. ["C4", "D4", "E4", ...])
+notes = ma_utils.generate_scale("major", "C")                       # 3 octaves, starting C4
 notes = ma_utils.generate_scale("blues", "A")
-notes = ma_utils.generate_scale("dorian", "D", start_octave=3)
+notes = ma_utils.generate_scale("dorian", "D", start_octave=3)      # start at D3
+notes = ma_utils.generate_scale("major", "C", num_octaves=1)        # single octave (7 notes)
+notes = ma_utils.generate_scale("major", "C", num_octaves=4)        # four octaves
 ```
 
-Available scales: `major`, `natural_minor`, `harmonic_minor`, `melodic_minor`, `blues`, `pentatonic_major`, `pentatonic_minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `aeolian`, `locrian`.
+`start_octave` sets the lowest root note (default 4 → C4). `num_octaves` controls how many octaves are spanned (default 3); raises `ValueError` for values below 1.
+
+Available scales: `major`, `natural_minor`, `harmonic_minor`, `melodic_minor`, `blues`, `pentatonic_major`, `pentatonic_minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `aeolian`, `locrian`, `chromatic`.
 
 ### Chords
 
@@ -339,12 +348,14 @@ notes = ma_utils.generate_random_beat(
     available_notes,
     tempo=120,
     time_signature=(4, 4),
-    beat_duration=4,   # seconds
+    beat_duration=4,           # seconds
     mode=ma_utils.BEAT_MODE_FIXED_16TH,
+    velocity=100,              # base MIDI velocity (default 100)
+    velocity_jitter=10,        # ± random offset per note for natural dynamics (default 0)
 )
 ```
 
-Returns a list of `pretty_midi.Note` objects. The `mode` parameter selects the sub-beat grid (see Beat modes above). Notes and rests are placed on the grid (default ~8% rest probability), each lasting a random integer multiple of the grid unit.
+Returns a list of `pretty_midi.Note` objects. The `mode` parameter selects the sub-beat grid (see Beat modes above). Notes and rests are placed on the grid (80 % note / 20 % rest), each lasting a random integer multiple of the grid unit. `velocity_jitter` adds a random ±offset to each note's velocity, clamped to [1, 127]; leave it at 0 for a flat dynamic.
 
 ### Drum Lines
 
@@ -449,7 +460,7 @@ Notes use sharps only (`C#`, not `Db`). Percussion always uses MIDI channel 10.
 
 ## Tests
 
-Run the test suite (137+ tests):
+Run the test suite (213 tests):
 
 ```
 .venv\Scripts\python -m pytest tests/ -v
