@@ -1,0 +1,4 @@
+# Development / CI tooling (not required to run MusicAnvil, only to test and audit it).
+# Install into the isolated project venv:  pip install -r requirements-dev.txt
+pytest==9.1.1
+pip-audit==2.10.1

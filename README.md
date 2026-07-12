@@ -16,11 +16,21 @@ And it needs no Artificial Intelligence to do so...
 - Python 3.13
 - `pretty_midi` and its transitive dependencies
 
+Use an **isolated** virtual environment so the project does not pick up (and inherit the
+vulnerabilities of) unrelated packages from a system/Anaconda base install. A plain
+`venv` is isolated by default (`include-system-site-packages = false`):
+
+```
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-lock.txt
+```
+
 Install from the project root (exact versions pinned in `requirements-lock.txt`):
 
 ```
 pip install -r requirements.txt           # minimum — only pretty_midi pinned
-pip install -r requirements-lock.txt      # reproducible — all transitive deps pinned
+pip install -r requirements-lock.txt      # reproducible — all runtime deps pinned
+pip install -r requirements-dev.txt       # test/audit tooling (pytest, pip-audit)
 ```
 
 ## Architecture
