@@ -1,6 +1,6 @@
 # MusicAnvil
 
-MusicAnvil was inspired by the book by Italian musician Marco "Mark the Hammer" Arata.
+MusicAnvil was inspired by the book "write a hit in 90 mins" by Italian musician Marco "Mark the Hammer" Arata.
 The book explains the basics of music theory in a fun and practical way: Mark the Hammer's thesis is that anybody can create a song in one hour by just applying a few practical rules, because creating something is the first step towards a more serious and organic study of music theory.
 This software tries to distill what's in the book and can be used directly, via a GUI, to generate music, or as a library to create (MIDI) music procedurally.
 
