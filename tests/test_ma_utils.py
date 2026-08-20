@@ -4,10 +4,11 @@
 
 import random
 import unittest
+from unittest.mock import patch
 
 import pretty_midi
 
-from musicanvil import ma_utils
+from musicanvil import MusicAnvil, ma_utils
 
 
 class TestGenerateRandomBeatBaseUnit(unittest.TestCase):
@@ -881,6 +882,232 @@ class TestMetalPunkRockPatterns(unittest.TestCase):
         # Double kick = two consecutive kicks with a gap ≤ 0.5 beats
         has_double = any(b - a <= 0.5 for a, b in zip(kicks, kicks[1:]))
         self.assertTrue(has_double, "Metal pattern should contain a double-kick figure")
+
+
+class TestBeatSubUnitIsSharedWithTheEngine(unittest.TestCase):
+    """ToDo 3.2 — the mode → sub-beat grid mapping must be defined once, in
+    ma_utils.beat_sub_unit, and used by MusicAnvil.generate_lead_line too."""
+
+    def test_mode1_grid_is_a_sixteenth_note(self):
+        sub_unit, max_mult = ma_utils.beat_sub_unit(120, 1.0, ma_utils.BEAT_MODE_FIXED_16TH)
+        self.assertAlmostEqual(sub_unit, 0.125)   # 60/120/4
+        self.assertEqual(max_mult, 8)
+
+    def test_mode2_grid_is_half_the_beat(self):
+        sub_unit, max_mult = ma_utils.beat_sub_unit(120, 0.25, ma_utils.BEAT_MODE_HALF_DENOM)
+        self.assertAlmostEqual(sub_unit, 0.125)
+        self.assertEqual(max_mult, 8)
+
+    def test_unknown_mode_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.beat_sub_unit(120, 0.5, 99)
+
+    def test_signature_keyed_wrapper_agrees(self):
+        """_beat_sub_unit((n, d)) must equal beat_sub_unit(beat_seconds(tempo, d))."""
+        for signature in ((4, 4), (6, 8), (2, 2), (12, 16)):
+            beat_len = 60.0 / 120 * 4 / signature[1]
+            for mode in (ma_utils.BEAT_MODE_FIXED_16TH, ma_utils.BEAT_MODE_HALF_DENOM):
+                with self.subTest(signature=signature, mode=mode):
+                    self.assertEqual(ma_utils._beat_sub_unit(120, signature, mode),
+                                     ma_utils.beat_sub_unit(120, beat_len, mode))
+
+    def test_generate_lead_line_uses_the_shared_helper(self):
+        """Redefining the shared grid must move the engine's lead notes with it —
+        proving generate_lead_line does not keep its own copy of the mapping."""
+        beat_len = 0.5
+        third_of_a_beat = beat_len / 3
+        calls = []
+
+        def fake_sub_unit(tempo, beat_length, mode):
+            calls.append((tempo, beat_length, mode))
+            return third_of_a_beat, 1
+
+        with patch.object(ma_utils, "beat_sub_unit", fake_sub_unit):
+            notes = MusicAnvil.generate_lead_line(
+                [60, 62, 64], n_beats=4, beat_len=beat_len, rng=random.Random(3),
+                mode=ma_utils.BEAT_MODE_FIXED_16TH, tempo=120, rest_prob=0.0,
+            )
+
+        self.assertEqual(calls, [(120, beat_len, ma_utils.BEAT_MODE_FIXED_16TH)])
+        self.assertTrue(notes, "expected the fake grid to still produce notes")
+        for note in notes:
+            slot = note.start / third_of_a_beat
+            self.assertAlmostEqual(slot, round(slot), places=6,
+                                   msg=f"note start {note.start} is off the shared grid")
+
+    def test_generate_lead_line_rejects_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            MusicAnvil.generate_lead_line([60, 62], n_beats=4, beat_len=0.5,
+                                          rng=random.Random(1), mode=99, tempo=120)
+
+
+class TestAdaptDrumLineDenominator(unittest.TestCase):
+    """ToDo 3.1 — adapt_drum_line must read beats in the signature's denominator unit."""
+
+    DRUM_LINE = [[100, 35, 0, 1], [100, 38, 1, 2], [80, 42, 2, 4]]
+
+    def test_default_denominator_is_the_quarter_note(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120)
+        self.assertAlmostEqual(result[1][2], 0.5)   # beat 1 at 120 BPM = 0.5 s
+        self.assertAlmostEqual(result[2][3], 2.0)   # beat 4 = 2.0 s
+
+    def test_eighth_note_denominator_halves_every_time(self):
+        quarters = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, denominator=4)
+        eighths = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, denominator=8)
+        for quarter_entry, eighth_entry in zip(quarters, eighths):
+            self.assertAlmostEqual(eighth_entry[2], quarter_entry[2] / 2)
+            self.assertAlmostEqual(eighth_entry[3], quarter_entry[3] / 2)
+
+    def test_half_note_denominator_doubles_every_time(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, denominator=2)
+        self.assertAlmostEqual(result[1][2], 1.0)   # one half-note beat at 120 BPM
+
+    def test_velocities_are_untouched_by_the_denominator(self):
+        result = ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, denominator=16)
+        self.assertEqual([entry[0] for entry in result], [100, 100, 80])
+
+    def test_non_positive_denominator_raises(self):
+        for bad in (0, -4):
+            with self.subTest(denominator=bad):
+                with self.assertRaises(ValueError):
+                    ma_utils.adapt_drum_line(self.DRUM_LINE, tempo=120, denominator=bad)
+
+
+class TestFitDrumLineToBar(unittest.TestCase):
+    """ToDo 3.1 — a genre pattern must fill exactly one bar of the signature in use:
+    repeated when the bar is longer, cut at the bar line when it is shorter."""
+
+    # A 4-beat pattern: kick on 1 and 3, snare on 2 and 4.
+    PATTERN = [[100, 35, 0, 1], [100, 38, 1, 2], [100, 35, 2, 3], [100, 38, 3, 4]]
+    TEMPO = 120
+
+    def _starts(self, bar_line):
+        return [round(entry[2], 9) for entry in bar_line]
+
+    def test_four_four_matches_plain_adapt_drum_line(self):
+        """The common case must be byte-for-byte what adapt_drum_line already produced."""
+        fitted = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (4, 4),
+                                               beats_per_pattern=4)
+        plain = ma_utils.adapt_drum_line(self.PATTERN, self.TEMPO)
+        self.assertEqual(fitted, plain)
+
+    def test_shorter_bar_cuts_the_pattern_at_the_bar_line(self):
+        """3/4: the pattern's 4th beat would land on the next bar's downbeat — drop it."""
+        bar_line = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (3, 4),
+                                                 beats_per_pattern=4)
+        self.assertEqual(self._starts(bar_line), [0.0, 0.5, 1.0])
+
+    def test_longer_bar_repeats_the_pattern(self):
+        """5/4: 4 beats of pattern + the first beat again = 5 beats of drums."""
+        bar_line = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (5, 4),
+                                                 beats_per_pattern=4)
+        self.assertEqual(self._starts(bar_line), [0.0, 0.5, 1.0, 1.5, 2.0])
+
+    def test_eighth_note_signature_stays_on_the_eighth_grid(self):
+        """6/8: beats are eighths (0.25 s), so the bar is 1.5 s and the pattern repeats."""
+        bar_line = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (6, 8),
+                                                 beats_per_pattern=4)
+        self.assertEqual(self._starts(bar_line), [0.0, 0.25, 0.5, 0.75, 1.0, 1.25])
+
+    def test_nothing_starts_or_ends_outside_the_bar(self):
+        for signature in ((4, 4), (3, 4), (5, 4), (6, 8), (7, 8), (12, 16), (2, 2)):
+            with self.subTest(signature=signature):
+                beat = 60.0 / self.TEMPO * 4 / signature[1]
+                bar_seconds = signature[0] * beat
+                bar_line = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, signature,
+                                                         beats_per_pattern=4)
+                self.assertTrue(bar_line, "the bar must not be left empty")
+                for _, _, start, end in bar_line:
+                    self.assertGreaterEqual(start, -1e-9)
+                    self.assertLess(start, bar_seconds + 1e-9)
+                    self.assertLessEqual(end, bar_seconds + 1e-9)
+
+    def test_no_gap_longer_than_the_pattern_at_the_end_of_the_bar(self):
+        """A longer bar must be filled, not left with a silent tail."""
+        beat = 0.5
+        bar_line = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (7, 4),
+                                                 beats_per_pattern=4)
+        last_start = max(entry[2] for entry in bar_line)
+        self.assertGreater(last_start, 7 * beat - 4 * beat)
+
+    def test_declared_pattern_length_drives_the_repeat(self):
+        """A 3-beat pattern (Waltz) repeats every 3 beats, not every 4."""
+        waltz = [[100, 35, 0, 1], [100, 38, 1, 2]]
+        bar_line = ma_utils.fit_drum_line_to_bar(waltz, self.TEMPO, (6, 4),
+                                                 beats_per_pattern=3)
+        self.assertEqual(self._starts(bar_line), [0.0, 0.5, 1.5, 2.0])
+
+    def test_empty_pattern_yields_an_empty_bar(self):
+        self.assertEqual(ma_utils.fit_drum_line_to_bar([], self.TEMPO, (4, 4)), [])
+
+    def test_velocity_scaling_is_forwarded(self):
+        bar_line = ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (4, 4),
+                                                 beats_per_pattern=4,
+                                                 velocity_scaling_factor=0.5)
+        self.assertTrue(all(entry[0] == 50 for entry in bar_line))
+
+    def test_non_positive_pattern_length_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (4, 4), beats_per_pattern=0)
+
+    def test_non_positive_numerator_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.fit_drum_line_to_bar(self.PATTERN, self.TEMPO, (0, 4))
+
+
+class TestDrumPatternBeatsConfig(unittest.TestCase):
+    """ToDo 3.1 — every genre declares the bar length its pattern was authored for."""
+
+    def test_every_genre_declares_a_pattern_length(self):
+        for genre in ma_utils.drum_lines:
+            with self.subTest(genre=genre):
+                self.assertIn(genre, ma_utils.drum_pattern_beats,
+                              f"'{genre}' has no entry in drum_pattern_beats")
+
+    def test_declared_lengths_are_positive_numbers(self):
+        for genre, beats in ma_utils.drum_pattern_beats.items():
+            with self.subTest(genre=genre):
+                self.assertIsInstance(beats, (int, float))
+                self.assertGreater(beats, 0)
+
+    def test_pattern_covers_the_declared_length(self):
+        """No pattern may contain a hit starting at or after its declared bar length."""
+        for genre, entries in ma_utils.drum_lines.items():
+            with self.subTest(genre=genre):
+                beats = ma_utils.pattern_beats(genre)
+                self.assertLess(max(entry[2] for entry in entries), beats,
+                                f"'{genre}' has a hit starting on/after beat {beats}")
+
+    def test_waltz_is_a_three_beat_pattern(self):
+        self.assertEqual(ma_utils.pattern_beats("Waltz"), 3)
+
+    def test_unknown_genre_falls_back_to_the_default(self):
+        self.assertEqual(ma_utils.pattern_beats("Nonexistent Genre"),
+                         ma_utils.DEFAULT_PATTERN_BEATS)
+
+
+class TestSignatureOptions(unittest.TestCase):
+    """ToDo 3.4 — the GUI must only offer real time signatures."""
+
+    def setUp(self):
+        self.options = ma_utils.get_param("gui", "signature_options", default=[])
+
+    def test_options_are_present(self):
+        self.assertTrue(self.options)
+
+    def test_every_denominator_is_a_power_of_two(self):
+        for option in self.options:
+            with self.subTest(signature=option):
+                _, denominator = MusicAnvil.parse_signature(option)
+                self.assertEqual(denominator & (denominator - 1), 0,
+                                 f"'{option}' has denominator {denominator}, which is not "
+                                 "a power of two and is not a real time signature")
+
+    def test_nonstandard_six_twelfths_is_gone(self):
+        self.assertNotIn("6/12", self.options)
+
+    def test_no_duplicates(self):
+        self.assertEqual(len(self.options), len(set(self.options)))
 
 
 if __name__ == "__main__":

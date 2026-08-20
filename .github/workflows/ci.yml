@@ -1,0 +1,43 @@
+name: CI
+
+# Runs the test suite and a dependency vulnerability scan against an isolated
+# environment built from the pinned requirement files (ToDo 3.5). The venv isolation
+# fix (ToDo 1.1) only holds if nothing else leaks in, so the audit runs on a clean
+# environment that contains exactly the pinned runtime + dev dependencies.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Weekly, so newly disclosed CVEs in the pinned dependencies surface without a push.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  test-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Upgrade build tooling
+        # Keeps pip/setuptools/wheel off the versions flagged in ToDo 1.2.
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install -r requirements-lock.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run the test suite
+        # tkinter is mocked in tests/test_gui.py, so no display is needed.
+        run: python -m pytest tests/ -v
+
+      - name: Audit dependencies for known vulnerabilities
+        run: python -m pip_audit --strict --progress-spinner off

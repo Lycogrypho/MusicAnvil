@@ -2,8 +2,12 @@
 
 # OopCompanion:suppressRename
 
+import os
 import random
+import tempfile
 import unittest
+import warnings
+from unittest.mock import patch
 
 import pretty_midi
 
@@ -657,6 +661,279 @@ class TestTempoChangeEvents(unittest.TestCase):
         _, tempos = midi.get_tempo_changes()
         # Three distinct tempo events: 120 → 200 → 120
         self.assertEqual(len(tempos), 3)
+
+
+class TestTempoInternalsGuard(unittest.TestCase):
+    """ToDo 2.1 — _insert_midi_tempo_change reaches into private pretty_midi members.
+
+    The guard must (a) tell us loudly, via a failing test, when a pretty_midi upgrade
+    renames them, and (b) degrade to a warning at render time instead of raising
+    AttributeError in the middle of a piece.
+    """
+
+    def _two_tempo_piece(self):
+        piece = _make_piece(structure=["A", "B"], bars=1)
+        piece.sections["B"] = MusicAnvil.SectionSpec(name="B", bars=1, tempo=200)
+        return piece
+
+    def test_pinned_pretty_midi_still_exposes_the_internals(self):
+        """Fails on a dependency bump that renames/removes what we depend on."""
+        missing = MusicAnvil._missing_tempo_internals(pretty_midi.PrettyMIDI())
+        self.assertEqual(
+            missing, [],
+            f"pretty_midi no longer exposes {missing}; _insert_midi_tempo_change must be "
+            "reworked against the new internals (it currently falls back to no tempo map).",
+        )
+
+    def test_insertion_reports_success_on_the_pinned_version(self):
+        midi = pretty_midi.PrettyMIDI(initial_tempo=120)
+        self.assertTrue(MusicAnvil._insert_midi_tempo_change(midi, 2.0, 200))
+        _, tempos = midi.get_tempo_changes()
+        self.assertEqual(len(tempos), 2)
+
+    def test_missing_internals_warn_and_return_false(self):
+        class Stripped:
+            """A pretty_midi that renamed its internals away."""
+            resolution = 220
+
+            def time_to_tick(self, time):
+                return 0
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            inserted = MusicAnvil._insert_midi_tempo_change(Stripped(), 0.0, 200)
+        self.assertFalse(inserted)
+        self.assertEqual(len(caught), 1)
+        self.assertTrue(issubclass(caught[0].category, RuntimeWarning))
+        self.assertIn("_tick_scales", str(caught[0].message))
+
+    def test_internal_failure_is_caught_and_warned(self):
+        """Internals present but behaving differently must not escape as an exception."""
+        midi = pretty_midi.PrettyMIDI(initial_tempo=120)
+        with patch.object(type(midi), "time_to_tick",
+                          side_effect=AttributeError("renamed"), create=True):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                inserted = MusicAnvil._insert_midi_tempo_change(midi, 1.0, 200)
+        self.assertFalse(inserted)
+        self.assertTrue(caught and issubclass(caught[0].category, RuntimeWarning))
+
+    def test_render_piece_still_renders_when_the_internals_are_gone(self):
+        piece = self._two_tempo_piece()
+        with patch.object(MusicAnvil, "_TEMPO_INTERNALS", ("_no_such_attribute",)):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertIsInstance(midi, pretty_midi.PrettyMIDI)
+        self.assertTrue(any(inst.notes for inst in midi.instruments),
+                        "the piece must still contain notes without a tempo map")
+        self.assertTrue(any(issubclass(w.category, RuntimeWarning) for w in caught),
+                        "the fallback must warn that the tempo map was skipped")
+
+    def test_fallback_render_is_still_writable(self):
+        piece = self._two_tempo_piece()
+        with patch.object(MusicAnvil, "_TEMPO_INTERNALS", ("_no_such_attribute",)):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                midi = MusicAnvil.render_piece(piece, random.Random(1))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "fallback.mid")
+            midi.write(path)
+            self.assertTrue(os.path.getsize(path) > 0)
+
+    def test_normal_render_emits_no_warning(self):
+        piece = self._two_tempo_piece()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            MusicAnvil.render_piece(piece, random.Random(1))
+        runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        self.assertEqual(runtime_warnings, [])
+
+
+class TestTimeSignatureEvents(unittest.TestCase):
+    """ToDo 2.2 — render_piece must write MIDI time-signature events, at time 0 and at
+    every section boundary where the resolved signature changes."""
+
+    def _piece(self, piece_signature=(4, 4), section_signatures=(None,)):
+        sections = {}
+        structure = []
+        for index, signature in enumerate(section_signatures):
+            name = f"S{index}"
+            sections[name] = MusicAnvil.SectionSpec(name=name, bars=1, signature=signature)
+            structure.append(name)
+        return MusicAnvil.PieceSpec(
+            tempo=120,
+            signature=piece_signature,
+            rhythm="Rock",
+            scale="major",
+            tonic="C",
+            roles={
+                MusicAnvil.ROLE_LEAD: MusicAnvil.RoleAssignment(main="Piano"),
+                MusicAnvil.ROLE_ACCOMPANIMENT: MusicAnvil.RoleAssignment(),
+                MusicAnvil.ROLE_BASS: MusicAnvil.RoleAssignment(),
+            },
+            sections=sections,
+            structure=structure,
+        )
+
+    @staticmethod
+    def _events(midi):
+        return [(ts.numerator, ts.denominator, round(ts.time, 6))
+                for ts in midi.time_signature_changes]
+
+    def test_piece_signature_is_written_at_time_zero(self):
+        midi = MusicAnvil.render_piece(self._piece((3, 4)), random.Random(1))
+        self.assertEqual(self._events(midi), [(3, 4, 0.0)])
+
+    def test_default_four_four_is_written_too(self):
+        """Even the default signature is emitted, so nothing relies on the DAW's guess."""
+        midi = MusicAnvil.render_piece(self._piece((4, 4)), random.Random(1))
+        self.assertEqual(self._events(midi), [(4, 4, 0.0)])
+
+    def test_first_section_override_replaces_the_opening_signature(self):
+        piece = self._piece((4, 4), section_signatures=[(6, 8)])
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertEqual(self._events(midi), [(6, 8, 0.0)])
+
+    def test_section_change_lands_at_the_section_boundary(self):
+        piece = self._piece((4, 4), section_signatures=[None, (3, 4)])
+        first_section = MusicAnvil.section_seconds(1, 120, (4, 4))  # 2.0 s
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertEqual(self._events(midi),
+                         [(4, 4, 0.0), (3, 4, round(first_section, 6))])
+
+    def test_unchanged_signature_writes_no_extra_event(self):
+        piece = self._piece((4, 4), section_signatures=[None, None, None])
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertEqual(self._events(midi), [(4, 4, 0.0)])
+
+    def test_reverting_to_the_piece_signature_writes_an_event(self):
+        piece = self._piece((4, 4), section_signatures=[None, (3, 4), None])
+        bar_4_4 = MusicAnvil.section_seconds(1, 120, (4, 4))
+        bar_3_4 = MusicAnvil.section_seconds(1, 120, (3, 4))
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertEqual(self._events(midi), [
+            (4, 4, 0.0),
+            (3, 4, round(bar_4_4, 6)),
+            (4, 4, round(bar_4_4 + bar_3_4, 6)),
+        ])
+
+    def test_events_survive_a_write_read_round_trip(self):
+        piece = self._piece((4, 4), section_signatures=[None, (3, 4)])
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "signatures.mid")
+            midi.write(path)
+            reloaded = pretty_midi.PrettyMIDI(path)
+        events = [(ts.numerator, ts.denominator) for ts in reloaded.time_signature_changes]
+        self.assertEqual(events, [(4, 4), (3, 4)])
+        boundary = MusicAnvil.section_seconds(1, 120, (4, 4))
+        self.assertAlmostEqual(reloaded.time_signature_changes[1].time, boundary, places=2)
+
+    def test_signature_events_coexist_with_tempo_changes(self):
+        piece = self._piece((4, 4), section_signatures=[None, (3, 4)])
+        piece.sections["S1"].tempo = 200
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        boundary = MusicAnvil.section_seconds(1, 120, (4, 4))
+        _, tempos = midi.get_tempo_changes()
+        self.assertEqual(len(tempos), 2)
+        self.assertEqual(self._events(midi), [(4, 4, 0.0), (3, 4, round(boundary, 6))])
+
+    def test_nonstandard_denominator_is_skipped_with_a_warning(self):
+        """A denominator that is not a power of two cannot be encoded in MIDI."""
+        piece = self._piece((6, 12))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            midi = MusicAnvil.render_piece(piece, random.Random(1))
+        self.assertEqual(self._events(midi), [])
+        self.assertTrue(any("6/12" in str(w.message) for w in caught),
+                        "expected a warning naming the unrepresentable signature")
+
+    def test_is_power_of_two_helper(self):
+        for good in (1, 2, 4, 8, 16, 32):
+            self.assertTrue(MusicAnvil._is_power_of_two(good), good)
+        for bad in (0, -4, 3, 6, 12, 20):
+            self.assertFalse(MusicAnvil._is_power_of_two(bad), bad)
+
+
+class TestDrumPatternFollowsSignature(unittest.TestCase):
+    """ToDo 3.1 — the drum pattern must fill the bar of the section's signature instead
+    of assuming a 4-quarter-note bar."""
+
+    def _drums(self, rhythm, signature, bars=2, tempo=120):
+        piece = MusicAnvil.PieceSpec(
+            tempo=tempo,
+            signature=signature,
+            rhythm=rhythm,
+            scale="major",
+            tonic="C",
+            roles={
+                MusicAnvil.ROLE_LEAD: MusicAnvil.RoleAssignment(),
+                MusicAnvil.ROLE_ACCOMPANIMENT: MusicAnvil.RoleAssignment(),
+                MusicAnvil.ROLE_BASS: MusicAnvil.RoleAssignment(),
+            },
+        )
+        resolved = MusicAnvil.resolve_section(
+            MusicAnvil.SectionSpec(name="A", bars=bars), piece)
+        tracks, length = MusicAnvil.render_section(resolved, random.Random(1))
+        return tracks[MusicAnvil.DRUM_TRACK], length
+
+    def test_four_four_rendering_is_unchanged(self):
+        """The 4/4 case must still be the plain adapted pattern, bar after bar."""
+        drums, _ = self._drums("Rock", (4, 4), bars=2)
+        expected = ma_utils.adapt_drum_line(ma_utils.drum_lines["Rock"], 120)
+        bar_len = 4 * MusicAnvil.beat_seconds(120, 4)
+        got = sorted((round(n.start, 6), n.pitch) for n in drums)
+        want = sorted([(round(entry[2] + bar * bar_len, 6), entry[1])
+                       for bar in (0, 1) for entry in expected])
+        self.assertEqual(got, want)
+
+    def test_no_drum_note_crosses_a_bar_line_in_three_four(self):
+        """3/4 with a 4-beat pattern: the 4th beat used to spill onto the next downbeat."""
+        drums, _ = self._drums("Rock", (3, 4), bars=4)
+        bar_len = 3 * MusicAnvil.beat_seconds(120, 4)
+        for note in drums:
+            bar = int(note.start // bar_len + 1e-9)
+            self.assertLessEqual(note.end, (bar + 1) * bar_len + 1e-9,
+                                 f"drum note {note.start}-{note.end} crosses the bar line")
+
+    def test_three_four_downbeat_hits_only_the_pattern_start(self):
+        """Every bar must open with the pattern's first hit, not a leftover from the last."""
+        drums, _ = self._drums("Rock", (3, 4), bars=4)
+        bar_len = 3 * MusicAnvil.beat_seconds(120, 4)
+        bass_pitch = ma_utils.drum_pitches["Bass Drum"]
+        snare_pitch = ma_utils.drum_pitches["Snare Drum"]
+        downbeat_pitches = {n.pitch for n in drums
+                            if abs(n.start % bar_len) < 1e-9 or abs(n.start % bar_len - bar_len) < 1e-9}
+        self.assertIn(bass_pitch, downbeat_pitches)
+        self.assertNotIn(snare_pitch, downbeat_pitches,
+                         "a snare on the downbeat means the previous bar overran")
+
+    def test_eighth_signature_bar_is_filled_end_to_end(self):
+        """6/8: a 4-beat pattern must repeat to cover all six eighths, leaving no gap."""
+        drums, length = self._drums("Rock", (6, 8), bars=1)
+        beat = MusicAnvil.beat_seconds(120, 8)
+        starts = sorted({round(n.start / beat, 6) for n in drums})
+        self.assertEqual(starts, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertAlmostEqual(length, 6 * beat)
+
+    def test_all_notes_stay_inside_the_section(self):
+        for rhythm in ("Rock", "Waltz", "Metal", "Jazz"):
+            for signature in ((4, 4), (3, 4), (6, 8), (5, 4)):
+                with self.subTest(rhythm=rhythm, signature=signature):
+                    drums, length = self._drums(rhythm, signature, bars=2)
+                    self.assertTrue(drums)
+                    for note in drums:
+                        self.assertGreaterEqual(note.start, -1e-9)
+                        self.assertLessEqual(note.end, length + 1e-9)
+
+    def test_waltz_pattern_fills_a_four_four_bar(self):
+        """The 3-beat Waltz pattern repeats to cover the 4th beat of a 4/4 bar."""
+        drums, _ = self._drums("Waltz", (4, 4), bars=1)
+        beat = MusicAnvil.beat_seconds(120, 4)
+        latest = max(n.start for n in drums)
+        self.assertGreaterEqual(latest, 3 * beat - 1e-9,
+                                "the 4th beat of the bar was left silent")
 
 
 if __name__ == "__main__":

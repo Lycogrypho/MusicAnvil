@@ -170,6 +170,12 @@ drum_pitches = _CONFIG["drum_pitches"]
 # Genre name -> list of [velocity, pitch, start_beat, end_beat] entries (beats, not seconds).
 drum_lines = _CONFIG["drum_lines"]
 
+# Authored length of a genre pattern, in beats. Patterns are written for a bar of this
+# many beats; fit_drum_line_to_bar repeats or cuts them to fill the bar of the signature
+# actually in use. Genres missing from the mapping are the common 4-beat case.
+DEFAULT_PATTERN_BEATS = 4
+drum_pattern_beats = _CONFIG.get("drum_pattern_beats", {})
+
 # Scale name -> list of [root_offset_from_tonic, chord_type] pairs that are allowed even when
 # not strictly diatonic. The engine applies these extensions alongside the normal scale filter.
 chord_palette_extensions = _CONFIG["chord_palette_extensions"]
@@ -257,22 +263,35 @@ BEAT_MODE_HALF_DENOM = 2   # Half the denominator unit: sub-beat variety that re
 BEAT_MODES = _CONFIG["beat_modes"]
 
 
-def _beat_sub_unit(tempo, time_signature, mode):
+def beat_sub_unit(tempo, beat_length, mode):
     """Return (sub_unit_seconds, max_multiplier) for the requested beat mode.
 
-    Mode 1: base = 16th note (quarter / 4). Multipliers 1-8 give 16th … half note.
-    Mode 2: base = half the denominator unit.  Multipliers 1-8 give 8th … double-whole.
+    This is the single definition of the mode → sub-beat grid mapping; both
+    ``generate_random_beat`` here and ``MusicAnvil.generate_lead_line`` call it so the
+    two grids cannot drift apart.
+
+    Parameters:
+    - tempo: Tempo in BPM.
+    - beat_length: Duration in seconds of one beat, i.e. the time signature's
+      denominator unit (``MusicAnvil.beat_seconds(tempo, denominator)``).
+    - mode: ``BEAT_MODE_FIXED_16TH`` — base = 16th note (quarter / 4); multipliers 1-8
+      give 16th … half note. ``BEAT_MODE_HALF_DENOM`` — base = half the beat;
+      multipliers 1-8 give half-beat … 4 beats.
     """
-    quarter = 60.0 / tempo
-    denom_unit = quarter * 4 / time_signature[1]
     if mode == BEAT_MODE_FIXED_16TH:
-        return quarter / 4, 8
+        return 60.0 / tempo / 4, 8
     if mode == BEAT_MODE_HALF_DENOM:
-        return denom_unit / 2, 8
+        return beat_length / 2, 8
     raise ValueError(
         f"Unknown beat generation mode {mode!r}. "
         f"Supported: {BEAT_MODE_FIXED_16TH} (fixed 16th), {BEAT_MODE_HALF_DENOM} (half-denominator)."
     )
+
+
+def _beat_sub_unit(tempo, time_signature, mode):
+    """``beat_sub_unit`` keyed by a (numerator, denominator) signature instead of the
+    beat length in seconds."""
+    return beat_sub_unit(tempo, 60.0 / tempo * 4 / time_signature[1], mode)
 
 
 def generate_random_beat(available_notes: list, tempo: float, time_signature: tuple = (4, 4),
@@ -391,7 +410,8 @@ def get_transformer(name):
     return fn
 
 
-def adapt_drum_line(drum_line: list, tempo: float, velocity_scaling_factor: float = 1.0) -> list:
+def adapt_drum_line(drum_line: list, tempo: float, velocity_scaling_factor: float = 1.0,
+                    denominator: int = 4) -> list:
     """Convert a beat-relative drum line to absolute seconds at the given tempo.
 
     Parameters:
@@ -399,6 +419,10 @@ def adapt_drum_line(drum_line: list, tempo: float, velocity_scaling_factor: floa
     - tempo: Tempo in beats per minute (BPM).
     - velocity_scaling_factor: Multiplier applied to each velocity (e.g. lower it for
       faster tempos, raise it for slower ones).
+    - denominator: Time-signature denominator setting the beat unit the entries are
+      counted in — 4 (default) = quarter notes, 8 = eighth notes, ... A pattern is
+      therefore read in the unit of the signature it is played in, so its hits stay on
+      the signature's beat grid.
 
     Returns a new drum line of [velocity, pitch, start_time, end_time] entries in seconds.
     """
@@ -408,13 +432,76 @@ def adapt_drum_line(drum_line: list, tempo: float, velocity_scaling_factor: floa
         raise ValueError(
             f"velocity_scaling_factor must be non-negative, got {velocity_scaling_factor}."
         )
-    quarter_note_duration = 60.0 / tempo
+    if denominator <= 0:
+        raise ValueError(f"denominator must be a positive number, got {denominator}.")
+    beat_duration = 60.0 / tempo * 4.0 / denominator
 
     adapted_line = []
     for velocity, pitch, start_beat, end_beat in drum_line:
-        start_time = start_beat * quarter_note_duration
-        end_time = end_beat * quarter_note_duration
+        start_time = start_beat * beat_duration
+        end_time = end_beat * beat_duration
         adapted_velocity = max(0, min(127, int(velocity * velocity_scaling_factor)))  # Clamp to valid MIDI range
         adapted_line.append([adapted_velocity, pitch, start_time, end_time])
 
     return adapted_line
+
+
+def pattern_beats(rhythm: str) -> float:
+    """Return the authored length of a genre pattern, in beats.
+
+    Read from ``drum_pattern_beats`` in the configuration, defaulting to
+    ``DEFAULT_PATTERN_BEATS`` (4) for genres that do not declare one.
+    """
+    return drum_pattern_beats.get(rhythm, DEFAULT_PATTERN_BEATS)
+
+
+def fit_drum_line_to_bar(drum_line: list, tempo: float, time_signature: tuple = (4, 4),
+                         beats_per_pattern: float = DEFAULT_PATTERN_BEATS,
+                         velocity_scaling_factor: float = 1.0) -> list:
+    """Adapt a drum pattern so it spans exactly one bar of *time_signature*.
+
+    The genre patterns in ``drum_lines`` are authored as a fixed number of beats
+    (``beats_per_pattern``, 4 for most genres — see ``drum_pattern_beats``), which need
+    not match the bar length of the signature they are played in. The pattern is read in
+    the signature's beat unit (see ``adapt_drum_line``) and then made to fill the bar:
+    it repeats from its start when the bar is longer, and is cut at the bar line when the
+    bar is shorter. Hits therefore always land on the signature's beat grid, and the
+    result never overruns into the next bar nor leaves a tail of silence.
+
+    For a 4-beat pattern in 4/4 this is exactly ``adapt_drum_line`` — the common case is
+    unchanged.
+
+    Parameters:
+    - drum_line: List of [velocity, pitch, start_beat, end_beat] entries.
+    - tempo: Tempo in beats per minute (BPM).
+    - time_signature: (numerator, denominator) of the bar to fill.
+    - beats_per_pattern: Authored length of *drum_line* in beats.
+    - velocity_scaling_factor: Forwarded to ``adapt_drum_line``.
+
+    Returns a list of [velocity, pitch, start_time, end_time] entries in seconds,
+    relative to the start of the bar, every one of them inside it.
+    """
+    if beats_per_pattern <= 0:
+        raise ValueError(f"beats_per_pattern must be positive, got {beats_per_pattern}.")
+    beats_per_bar, denominator = time_signature[0], time_signature[1]
+    if beats_per_bar <= 0:
+        raise ValueError(f"time signature numerator must be positive, got {beats_per_bar}.")
+
+    adapted = adapt_drum_line(drum_line, tempo, velocity_scaling_factor, denominator)
+    if not adapted:
+        return []
+
+    beat_duration = 60.0 / tempo * 4.0 / denominator
+    pattern_seconds = beats_per_pattern * beat_duration
+    bar_seconds = beats_per_bar * beat_duration
+
+    bar_line = []
+    offset = 0.0
+    while offset < bar_seconds - 1e-9:
+        for velocity, pitch, start_time, end_time in adapted:
+            start = offset + start_time
+            if start >= bar_seconds - 1e-9:
+                continue  # this repetition runs past the bar line — cut it
+            bar_line.append([velocity, pitch, start, min(offset + end_time, bar_seconds)])
+        offset += pattern_seconds
+    return bar_line

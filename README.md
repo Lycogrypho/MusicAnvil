@@ -33,6 +33,20 @@ pip install -r requirements-lock.txt      # reproducible — all runtime deps pi
 pip install -r requirements-dev.txt       # test/audit tooling (pytest, pip-audit)
 ```
 
+Or install the package itself — `pyproject.toml` declares the same runtime pin, the
+`dev` extra, and `MusicAnvil.json` as package data (without which an installed copy
+could not load any preset):
+
+```
+pip install .            # runtime only
+pip install .[dev]       # plus pytest and pip-audit
+```
+
+Every push and pull request runs the test suite and a `pip-audit` vulnerability scan
+against an environment built from the pinned requirement files
+(`.github/workflows/ci.yml`); the same job also runs weekly so newly disclosed CVEs
+surface without a commit.
+
 ## Architecture
 
 | Module | Role |
@@ -41,6 +55,10 @@ pip install -r requirements-dev.txt       # test/audit tooling (pytest, pip-audi
 | `musicanvil.ma_utils` | Utility library — scales, chords, drum patterns, MIDI helpers |
 | `musicanvil.MusicAnvil_GUI` | `tkinter` interface to the composition engine |
 | `musicanvil/MusicAnvil.json` | External configuration — all preset data and defaults (see [Configuration](#configuration)) |
+| `examples/` | Standalone `pretty_midi` snippets; not part of the package |
+
+A PlantUML view of the same structure — modules, dataclasses and the call flow — is in
+[`struct.puml`](struct.puml).
 
 All public symbols from both `MusicAnvil` and `ma_utils` are re-exported at the package level, so you can write either:
 
@@ -53,7 +71,7 @@ from musicanvil import MusicAnvil, ma_utils               # module import
 
 All preset data and defaults live in a single external file, `musicanvil/MusicAnvil.json`, so they can be tweaked without touching code. It holds:
 
-- **Musical data** — `notes_in_octave`, `scale_definitions`, `chord_definitions`, `drum_pitches`, `drum_lines`, `beat_modes`
+- **Musical data** — `notes_in_octave`, `scale_definitions`, `chord_definitions`, `drum_pitches`, `drum_lines`, `drum_pattern_beats`, `beat_modes`
 - **Instrument mapping** — `instrument_programs` (name → General MIDI program) and `velocities` (lead / bass / chord / support)
 - **`piece_defaults`** — the default values for every `PieceSpec` / `SectionSpec` field (tempo, signature, scale, tonic, the six articulation parameters, section bars, …)
 - **`gui`** — dropdown option lists, default section names, default role assignments, and the default output filename
@@ -198,7 +216,12 @@ midi_data = MusicAnvil.render_piece(piece)
 midi_data.write("song.mid")
 ```
 
-When a section's resolved tempo differs from the piece default, `render_piece` inserts a MIDI tempo-change event at the section boundary so that sequencers and notation editors display correct bar and beat positions across the whole file.
+When a section's resolved tempo differs from the piece default, `render_piece` inserts a MIDI tempo-change event at the section boundary so that sequencers and notation editors display correct bar and beat positions across the whole file. Time signatures are written the same way: one event at time 0 and one at every later boundary where the resolved signature changes, so a piece in 3/4 (or with a 6/8 bridge) opens against the right bar grid instead of a default 4/4 one.
+
+Two caveats on those meta events:
+
+- pretty_midi has no public API for adding a tempo change to an object under construction, so the engine uses private members of the pinned `pretty_midi==0.2.11`. If a future version renames them, rendering does **not** fail: the tempo map is skipped, a `RuntimeWarning` explains why, and the notes — whose timing already reflects the per-section tempo — are still written. `tests/test_composer.py::TestTempoInternalsGuard` fails on such a bump so the breakage is caught at test time.
+- MIDI stores a time-signature denominator as a power-of-two exponent, so a signature like `6/12` cannot be represented. Such a signature still renders (the maths works), but no time-signature event is emitted for it and a `RuntimeWarning` says so. The GUI only offers real signatures.
 
 ### Section overrides
 
@@ -267,6 +290,10 @@ from musicanvil import ma_utils
 
 piece = MusicAnvil.PieceSpec(beat_mode=ma_utils.BEAT_MODE_HALF_DENOM, ...)
 ```
+
+Both the engine's melody generator and `generate_random_beat` take their grid from a
+single helper, `ma_utils.beat_sub_unit(tempo, beat_length, mode)`, which returns
+`(sub_unit_seconds, max_multiplier)` — so the two can never drift apart.
 
 ### Articulation parameters
 
@@ -385,6 +412,29 @@ adapted = ma_utils.adapt_drum_line(ma_utils.drum_lines["Jazz"], tempo=120,
                                    velocity_scaling_factor=0.8)
 ```
 
+**Beats and time signatures.** A pattern's beat numbers are counted in the time
+signature's denominator unit — quarter notes by default, eighth notes with
+`denominator=8`, and so on — so a pattern always lands on the grid of the signature it
+is played in:
+
+```python
+adapted = ma_utils.adapt_drum_line(ma_utils.drum_lines["Rock"], tempo=120, denominator=8)
+```
+
+Each genre also declares the bar length it was written for, in `drum_pattern_beats`
+(4 beats for every genre except `Waltz`, which is 3). Because that authored length need
+not match the bar in use, `fit_drum_line_to_bar` adapts the pattern to exactly one bar
+of a given signature — repeating it when the bar is longer, cutting it at the bar line
+when it is shorter — so the drums never overrun into the next bar nor leave a silent
+tail. This is what `render_section` calls, so any section signature works:
+
+```python
+bar = ma_utils.fit_drum_line_to_bar(
+    ma_utils.drum_lines["Rock"], tempo=120, time_signature=(6, 8),
+    beats_per_pattern=ma_utils.pattern_beats("Rock"),
+)   # a 4-beat pattern repeated to cover all six eighths of the bar
+```
+
 ### Beat Transformers
 
 Transformers are functions that shift the pitches of a list of `pretty_midi.Note` objects:
@@ -470,13 +520,13 @@ Notes use sharps only (`C#`, not `Db`). Percussion always uses MIDI channel 10.
 
 ## Tests
 
-Run the test suite (213 tests):
+Run the test suite (290 tests):
 
 ```
 .venv\Scripts\python -m pytest tests/ -v
 ```
 
-Tests cover the composition engine (`test_composer.py`), utility library (`test_ma_utils.py`), and GUI imports and structure operations (`test_gui.py`).
+Tests cover the composition engine (`test_composer.py`), utility library (`test_ma_utils.py`), GUI imports and structure operations (`test_gui.py`), the pinned environment (`test_dependencies.py`), and the repository layout and packaging metadata (`test_packaging.py`). The same suite plus `pip-audit` runs in CI on every push and pull request.
 
 ---
 

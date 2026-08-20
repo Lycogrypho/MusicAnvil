@@ -26,6 +26,7 @@ Generation layers per section:
 
 import bisect
 import random
+import warnings
 from dataclasses import dataclass, field
 
 import pretty_midi
@@ -242,16 +243,8 @@ def generate_lead_line(scale_pitches, n_beats, beat_len, rng,
     ``velocity_jitter``: max ±offset applied to VELOCITY_LEAD each note.
     ``step_bias``: probability of choosing within ±2 scale degrees of the previous pitch.
     """
-    if mode == ma_utils.BEAT_MODE_FIXED_16TH:
-        sub_unit = 60.0 / tempo / 4
-    elif mode == ma_utils.BEAT_MODE_HALF_DENOM:
-        sub_unit = beat_len / 2
-    else:
-        raise ValueError(
-            f"Unknown beat_mode {mode!r}. "
-            f"Supported: {ma_utils.BEAT_MODE_FIXED_16TH} (fixed 16th), "
-            f"{ma_utils.BEAT_MODE_HALF_DENOM} (half-denominator)."
-        )
+    # The mode → sub-beat grid mapping lives once, in ma_utils.beat_sub_unit.
+    sub_unit, max_length = ma_utils.beat_sub_unit(tempo, beat_len, mode)
 
     total_sub = round(n_beats * beat_len / sub_unit)
     section_end = total_sub * sub_unit
@@ -259,7 +252,7 @@ def generate_lead_line(scale_pitches, n_beats, beat_len, rng,
     pos = 0
     prev_idx = None
     while pos < total_sub:
-        length = min(rng.randint(1, 8), total_sub - pos)
+        length = min(rng.randint(1, max_length), total_sub - pos)
         if rng.random() >= rest_prob:
             # Stepwise bias: prefer ±2 scale degrees from the previous pitch
             if prev_idx is not None and rng.random() < step_bias:
@@ -443,16 +436,21 @@ def render_section(resolved, rng=None):
         drum_line = [e for e in drum_line if e[1] in enabled_pitches]
     drum_notes = []
     if drum_line:
-        adapted = ma_utils.adapt_drum_line(drum_line, resolved.tempo)
-        pattern_len = beats_per_bar * beat_len  # bar length, not max note-end time
+        # One bar of the genre pattern, fitted to this section's signature (repeated or
+        # cut so it spans the bar exactly), then tiled across the section.
+        bar_line = ma_utils.fit_drum_line_to_bar(
+            drum_line, resolved.tempo, resolved.signature,
+            beats_per_pattern=ma_utils.pattern_beats(resolved.rhythm),
+        )
+        bar_len = beats_per_bar * beat_len
         t = 0.0
         while t < length - 1e-9:
-            for velocity, pitch, start, end in adapted:
+            for velocity, pitch, start, end in bar_line:
                 if t + start >= length:
                     continue
                 drum_notes.append(pretty_midi.Note(velocity=velocity, pitch=pitch,
                                                    start=t + start, end=min(t + end, length)))
-            t += pattern_len
+            t += bar_len
     tracks[DRUM_TRACK] = drum_notes
 
     # b) bass line
@@ -488,20 +486,88 @@ def render_section(resolved, rng=None):
     return tracks, length
 
 
+# pretty_midi has no public API for inserting a tempo change into an object being
+# built, so _insert_midi_tempo_change reaches for these private members. They exist in
+# the pinned pretty_midi==0.2.11; _missing_tempo_internals() checks for them so a
+# dependency bump that renames them degrades to a warning instead of an AttributeError
+# at render time (see tests/test_composer.py::TestTempoInternalsGuard).
+_TEMPO_INTERNALS = ("_tick_scales", "_PrettyMIDI__tick_to_time", "_update_tick_to_time")
+
+_TEMPO_FALLBACK_MESSAGE = (
+    "This pretty_midi build does not expose the internals MusicAnvil uses to insert "
+    "tempo changes ({details}). The piece is rendered at its initial tempo — section "
+    "tempo overrides still change the note timing, but sequencers will show the wrong "
+    "bar/beat grid. MusicAnvil is verified against pretty_midi==0.2.11."
+)
+
+
+def _missing_tempo_internals(midi_data):
+    """Names from ``_TEMPO_INTERNALS`` that ``midi_data`` is missing (empty = all present)."""
+    return [name for name in _TEMPO_INTERNALS if not hasattr(midi_data, name)]
+
+
 def _insert_midi_tempo_change(midi_data, time_seconds, tempo_bpm):
     """Insert a MIDI tempo-change event at ``time_seconds`` with ``tempo_bpm`` BPM.
 
     Updates both ``midi_data._tick_scales`` (used by ``write()``) and the internal
     tick→time lookup table so subsequent ``time_to_tick`` calls remain accurate.
+
+    Returns True when the event was inserted. When the pretty_midi build in use no
+    longer exposes those internals, a ``RuntimeWarning`` is emitted and False is
+    returned so rendering completes without a tempo map rather than raising.
     """
-    resolution = midi_data.resolution
-    tick = midi_data.time_to_tick(time_seconds)
-    new_tick_scale = 60.0 / (tempo_bpm * resolution)
-    keys = [ts[0] for ts in midi_data._tick_scales]
-    idx = bisect.bisect_left(keys, tick)
-    midi_data._tick_scales.insert(idx, (tick, new_tick_scale))
-    current_max = len(midi_data._PrettyMIDI__tick_to_time) - 1
-    midi_data._update_tick_to_time(max(current_max, tick + 1))
+    missing = _missing_tempo_internals(midi_data)
+    if missing:
+        warnings.warn(
+            _TEMPO_FALLBACK_MESSAGE.format(details="missing: " + ", ".join(missing)),
+            RuntimeWarning, stacklevel=2,
+        )
+        return False
+
+    try:
+        resolution = midi_data.resolution
+        tick = midi_data.time_to_tick(time_seconds)
+        new_tick_scale = 60.0 / (tempo_bpm * resolution)
+        keys = [ts[0] for ts in midi_data._tick_scales]
+        idx = bisect.bisect_left(keys, tick)
+        midi_data._tick_scales.insert(idx, (tick, new_tick_scale))
+        current_max = len(midi_data._PrettyMIDI__tick_to_time) - 1
+        midi_data._update_tick_to_time(max(current_max, tick + 1))
+    except (AttributeError, TypeError, IndexError, ValueError) as exc:
+        warnings.warn(
+            _TEMPO_FALLBACK_MESSAGE.format(details=f"{type(exc).__name__}: {exc}"),
+            RuntimeWarning, stacklevel=2,
+        )
+        return False
+    return True
+
+
+def _is_power_of_two(value):
+    """True for 1, 2, 4, 8, ... — the only denominators a MIDI time signature can carry."""
+    return isinstance(value, int) and value > 0 and value & (value - 1) == 0
+
+
+def _append_midi_time_signature(midi_data, signature, time_seconds):
+    """Append a ``pretty_midi.TimeSignature`` event for ``signature`` at ``time_seconds``.
+
+    MIDI stores the denominator as a power-of-two exponent, so a nonstandard
+    denominator (e.g. the 12 of "6/12") cannot be represented: such a signature is
+    skipped with a ``RuntimeWarning`` rather than silently written as a different one.
+    Returns True when the event was appended.
+    """
+    numerator, denominator = int(signature[0]), int(signature[1])
+    if not _is_power_of_two(denominator):
+        warnings.warn(
+            f"Time signature {numerator}/{denominator} has a denominator that is not a "
+            "power of two and cannot be written as a MIDI time-signature event; "
+            "no event is emitted for it.",
+            RuntimeWarning, stacklevel=2,
+        )
+        return False
+    midi_data.time_signature_changes.append(
+        pretty_midi.TimeSignature(numerator, denominator, time_seconds)
+    )
+    return True
 
 
 def render_piece(piece, rng=None):
@@ -510,7 +576,9 @@ def render_piece(piece, rng=None):
     Each library section is rendered once and reused verbatim at every occurrence
     in the structure, so repeats are identical. When a section's resolved tempo
     differs from the preceding section, a MIDI tempo-change event is inserted at
-    the section boundary so sequencers display correct bar/beat positions.
+    the section boundary so sequencers display correct bar/beat positions. The
+    resolved time signature is emitted the same way: one event at time 0 and one at
+    every later boundary where the signature changes.
     """
     rng = rng if rng is not None else random.Random()
     if not piece.structure:
@@ -521,6 +589,7 @@ def render_piece(piece, rng=None):
     combined = {}
     offset = 0.0
     prev_tempo = piece.tempo
+    prev_signature = None  # None until the first section sets the opening signature
 
     for item in piece.structure:
         entry = _as_entry(item)
@@ -530,6 +599,10 @@ def render_piece(piece, rng=None):
         if resolved.tempo != prev_tempo:
             _insert_midi_tempo_change(midi_data, offset, resolved.tempo)
             prev_tempo = resolved.tempo
+        signature = tuple(resolved.signature)
+        if signature != prev_signature:
+            _append_midi_time_signature(midi_data, signature, offset)
+            prev_signature = signature
         if entry.section not in rendered:
             rendered[entry.section] = render_section(resolved, rng)
         tracks, length = rendered[entry.section]

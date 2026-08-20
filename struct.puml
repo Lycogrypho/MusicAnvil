@@ -1,0 +1,179 @@
+@startuml struct
+' MusicAnvil — structure of the package: three layers (GUI → engine → utilities) over a
+' single external configuration file. Render with PlantUML: java -jar plantuml.jar struct.puml
+
+title MusicAnvil — module structure
+
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "musicanvil" {
+
+  class "MusicAnvil_GUI" as GUI <<module>> {
+    .. tkinter interface ..
+    +MusicGeneratorApp
+    +piece_to_project_dict(piece, filename)
+    +project_dict_to_piece(data)
+    +fmt_mmss(seconds)
+    __ presets read from config __
+    SIGNATURE_OPTIONS
+    OCTAVE_OPTIONS
+    BEAT_MODE_OPTIONS
+    DEFAULT_SECTION_NAMES
+  }
+
+  class "MusicAnvil" as Engine <<module>> {
+    .. timing ..
+    +parse_signature(text)
+    +beat_seconds(tempo, denominator)
+    +section_seconds(bars, tempo, signature)
+    +piece_seconds(piece)
+    .. resolution ..
+    +resolve_section(section, piece)
+    .. generation ..
+    +generate_lead_line(...)
+    +generate_bass_line(...)
+    +generate_chord_line(...)
+    +derive_support_line(...)
+    .. rendering ..
+    +render_section(resolved, rng)
+    +render_piece(piece, rng)
+    -_insert_midi_tempo_change(midi, time, bpm)
+    -_append_midi_time_signature(midi, signature, time)
+    -_tempo_internals_available(midi)
+    __ constants __
+    ROLES / ROLE_LEAD / ROLE_ACCOMPANIMENT / ROLE_BASS
+    DRUM_TRACK / INSTRUMENT_PROGRAMS / VELOCITY_*
+  }
+
+  class "ma_utils" as Utils <<module>> {
+    .. configuration ..
+    +load_config(path, force_reload)
+    +get_param(*keys, default)
+    .. musical primitives ..
+    +generate_scale(scale_name, tonic, ...)
+    +generate_chord_notes(note_name, chord_type)
+    +find_compatible_chords(beat, chord_defs)
+    +beat_sub_unit(tempo, beat_length, mode)
+    +generate_random_beat(...)
+    .. drums ..
+    +adapt_drum_line(line, tempo, scaling, denominator)
+    +fit_drum_line_to_bar(line, tempo, signature, ...)
+    +pattern_beats(rhythm)
+    .. transformers ..
+    +tone_shift(beat, n) / +invert(beat)
+    +get_transformer(name)
+    .. midi io ..
+    +write_notes_to_midi(...)
+    +write_instruments_to_midi(...)
+    +print_midi_notes_detailed(path)
+    __ preset data (from config) __
+    notes_in_octave / scale_definitions / chord_definitions
+    drum_pitches / drum_lines / drum_pattern_beats
+    chord_palette_extensions / BEAT_MODES
+  }
+
+  class "MusicAnvil.json" as Config <<configuration>> {
+    notes_in_octave / scale_definitions
+    chord_definitions / chord_palette_extensions
+    drum_pitches / drum_lines / drum_pattern_beats
+    beat_modes / instrument_programs / velocities
+    piece_defaults / gui
+  }
+
+  package "piece model (dataclasses)" as Model {
+    class PieceSpec {
+      tempo : int
+      signature : (int, int)
+      rhythm / scale / tonic : str
+      tonic_octave : int
+      beat_mode : int
+      drums_enabled : list[str] | None
+      lead_* / bass_gate / chord_* : articulation
+      roles : dict[str, RoleAssignment]
+      sections : dict[str, SectionSpec]
+      structure : list[StructureEntry | str]
+    }
+    class SectionSpec {
+      name : str
+      bars : int
+      .. every other field is an override ..
+      None = inherit from PieceSpec
+    }
+    class StructureEntry {
+      section : str
+      transformer : str | None
+      transformer_kwargs : dict
+    }
+    class RoleAssignment {
+      main : str | None
+      supports : list[str]
+    }
+    class ResolvedSection {
+      every field filled in
+    }
+  }
+}
+
+package "examples" {
+  class "snippets.py" as Example <<script>> {
+    +build_drum_pattern()
+  }
+}
+
+package "tests" {
+  class "test_composer.py" as TComposer <<tests>>
+  class "test_ma_utils.py" as TUtils <<tests>>
+  class "test_gui.py" as TGui <<tests>>
+  class "test_dependencies.py" as TDeps <<tests>>
+  class "test_packaging.py" as TPack <<tests>>
+}
+
+class "pretty_midi 0.2.11" as PM <<external>>
+
+' --- layering ---
+GUI --> Engine : builds a PieceSpec,\ncalls render_piece()
+GUI --> Utils : dropdown data
+Engine --> Utils : scales, chords,\ndrum patterns, beat grid
+Utils ..> Config : load_config() (cached)
+Engine ..> Config : constants and\ndataclass defaults
+GUI ..> Config : gui presets
+
+Engine ..> PM : PrettyMIDI / Note /\nTimeSignature
+Utils ..> PM
+Example ..> PM
+
+' --- piece model ---
+PieceSpec "1" *-- "0..*" SectionSpec : sections
+PieceSpec "1" *-- "0..*" StructureEntry : structure
+PieceSpec "1" *-- "0..*" RoleAssignment : roles
+SectionSpec "1" *-- "0..*" RoleAssignment : role overrides
+StructureEntry ..> SectionSpec : names one
+SectionSpec ..> ResolvedSection : resolve_section(section, piece)
+Engine ..> Model : owns
+
+' --- tests ---
+TComposer ..> Engine
+TUtils ..> Utils
+TGui ..> GUI
+TDeps ..> PM : pinned versions installed
+TPack ..> Example
+TPack ..> Config : declared as package data
+
+note right of Engine
+  render_piece() renders each library
+  section once and reuses it at every
+  occurrence, emitting a tempo-change
+  and a time-signature event at each
+  boundary where they change.
+end note
+
+note bottom of Utils
+  fit_drum_line_to_bar() repeats or cuts a
+  genre pattern (authored length declared in
+  drum_pattern_beats) so it spans exactly one
+  bar of the section's time signature.
+end note
+
+@enduml

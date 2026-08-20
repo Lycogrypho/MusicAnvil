@@ -1,0 +1,13 @@
+# Virtual environment (machine-specific; recreate with: py -3.13 -m venv .venv)
+.venv/
+venv/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+
+# Generated MIDI output
+*.mid
+/.idea/*
+/.idea/claudeCodeEditorTabs.xml
+/.idea/dbnavigator.xml

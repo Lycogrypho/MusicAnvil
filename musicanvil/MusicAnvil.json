@@ -141,6 +141,19 @@
     ]
   },
 
+  "drum_pattern_beats": {
+    "Rock": 4,
+    "Bossa Nova": 4,
+    "Waltz": 3,
+    "Rock and Roll": 4,
+    "Country": 4,
+    "Blues": 4,
+    "Jazz": 4,
+    "Metal": 4,
+    "Epic Metal": 4,
+    "Punk Rock": 4
+  },
+
   "chord_palette_extensions": {
     "major":            [[10, "major"], [10, "dominant7"], [3, "major"], [8, "major"], [2, "dominant7"]],
     "natural_minor":    [[7, "major"], [7, "dominant7"]],
@@ -201,7 +214,7 @@
   },
 
   "gui": {
-    "signature_options": ["4/4", "2/2", "2/4", "3/4", "2/8", "4/8", "6/8", "8/8", "4/16", "6/16", "8/16", "12/16", "16/16", "6/12"],
+    "signature_options": ["4/4", "2/2", "2/4", "3/4", "5/4", "2/8", "4/8", "6/8", "8/8", "9/8", "12/8", "4/16", "6/16", "8/16", "12/16", "16/16"],
     "octave_options": ["2", "3", "4", "5", "6"],
     "default_section_names": ["Intro", "Verse", "Chorus", "Solo", "Bridge", "Outro"],
     "default_roles": {

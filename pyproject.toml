@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=78.1.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musicanvil"
+version = "1.0.0"
+description = "Procedural MIDI music generation — scales, chords, drum patterns and a tkinter GUI."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "GPL-3.0-or-later"
+authors = [{ name = "Cosimo Attanasi" }]
+keywords = ["midi", "music", "generation", "pretty_midi", "composition"]
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: MIDI",
+    "Intended Audience :: Developers",
+]
+# Runtime requirement; requirements-lock.txt pins the full transitive set for
+# reproducible installs, and requirements-dev.txt carries the test/audit tooling.
+dependencies = ["pretty_midi==0.2.11"]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "pip-audit==2.10.1"]
+
+[tool.setuptools]
+packages = ["musicanvil"]
+
+[tool.setuptools.package-data]
+# MusicAnvil.json is the single source of truth for every preset and default; without
+# this declaration an installed musicanvil would raise FileNotFoundError from
+# ma_utils.load_config().
+musicanvil = ["MusicAnvil.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
