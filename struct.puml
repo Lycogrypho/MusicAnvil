@@ -17,10 +17,15 @@ package "musicanvil" {
     +project_dict_to_piece(data)
     +fmt_mmss(seconds)
     __ built from declared metadata __
-    ARTIC_PARAMS / TOGGLE_PARAMS
-    _build_transformer_params()  ' from ma_utils.transformer_params
-    _MUSICAL_FIELDS (project format v2)
+    ARTIC_PARAMS / TOGGLE_PARAMS  ' drive both tabs
+    _build_transformer_params()   ' from ma_utils.transformer_params
+    _MUSICAL_FIELDS (project format v3)
     SIGNATURE_OPTIONS / BEAT_MODE_OPTIONS
+    INSTRUMENT_WIDTH / RHYTHM_WIDTH / SCALE_WIDTH
+    __ usability __
+    Tooltip + help_for()          ' from config parameter_help
+    describe_techniques(piece, spec)
+    modifier_stack / _duplicate_in_structure()
   }
 
   class "MusicAnvil" as Engine <<module>> {
@@ -135,8 +140,10 @@ package "musicanvil" {
     }
     class StructureEntry {
       section : str
-      transformer : str | None
+      transformer : str | None   ' single-modifier shorthand
       transformer_kwargs : dict
+      modifiers : [(name, kwargs)]
+      +all_modifiers() / +with_modifier()
     }
     class RoleAssignment {
       main : str | None

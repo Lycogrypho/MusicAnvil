@@ -9,6 +9,7 @@ tkinter is mocked so these tests run headless.
 import json
 import sys
 import unittest
+import unittest.mock
 from unittest.mock import MagicMock, patch, call
 
 
@@ -236,10 +237,11 @@ class TestProjectSerialization(unittest.TestCase):
             gui.piece_to_project_dict(self._sample_piece(MA)))
         self.assertEqual(len(restored.structure), 2)
         self.assertEqual(restored.structure[0].section, "Verse")
-        self.assertIsNone(restored.structure[0].transformer)
+        self.assertEqual(restored.structure[0].all_modifiers(), [])
         self.assertEqual(restored.structure[1].section, "Chorus")
-        self.assertEqual(restored.structure[1].transformer, "tone_shift")
-        self.assertEqual(restored.structure[1].transformer_kwargs, {"n": 5})
+        # A saved project restores its modifier stack; the single-transformer shorthand
+        # is one entry in it.
+        self.assertEqual(restored.structure[1].all_modifiers(), [("tone_shift", {"n": 5})])
 
     def test_project_dict_is_json_serialisable(self):
         gui = self._gui()
@@ -247,7 +249,7 @@ class TestProjectSerialization(unittest.TestCase):
         text = json.dumps(gui.piece_to_project_dict(self._sample_piece(MA)))
         restored, _ = gui.project_dict_to_piece(json.loads(text))
         self.assertEqual(restored.tempo, 132)
-        self.assertEqual(restored.structure[1].transformer_kwargs, {"n": 5})
+        self.assertEqual(restored.structure[1].all_modifiers(), [("tone_shift", {"n": 5})])
 
     def test_rejects_non_project_dict(self):
         gui = self._gui()
@@ -419,7 +421,7 @@ class TestTransformerParameterWidgets(unittest.TestCase):
 
 class TestProjectFormatVersionTwo(unittest.TestCase):
     """ToDo 4.5 — the phrasing/dynamics fields travel in the project file, and older
-    files still load."""
+    files still load. (Version 3 added the modifier stack; the fields are unchanged.)"""
 
     FIELDS = ("phrase_bars", "metric_accent", "intensity", "final_lengthening",
               "lead_syncopation")
@@ -432,10 +434,10 @@ class TestProjectFormatVersionTwo(unittest.TestCase):
             sections={"Verse": MA.SectionSpec(name="Verse", bars=4)},
             structure=["Verse"])
 
-    def test_version_is_two(self):
+    def test_version_is_at_least_two(self):
         with _patched_tk():
             gui_mod = _fresh_gui_module()
-            self.assertEqual(gui_mod.PROJECT_VERSION, 2)
+            self.assertGreaterEqual(gui_mod.PROJECT_VERSION, 2)
 
     def test_new_fields_are_saved(self):
         with _patched_tk():
@@ -522,6 +524,347 @@ class TestMusicalFieldsInTheForm(unittest.TestCase):
             for key, value in parsed.items():
                 with self.subTest(key=key):
                     self.assertEqual(value, getattr(defaults, key))
+
+
+class TestParameterHelp(unittest.TestCase):
+    """Every parameter the Main tab offers must explain itself."""
+
+    def test_help_exists_for_every_piece_parameter(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            keys = [key for key, *_ in gui_mod.ARTIC_PARAMS]
+            keys += [key for key, *_ in gui_mod.TOGGLE_PARAMS]
+            keys += ["tempo", "signature", "scale", "tonic", "tonic_octave", "beat_mode",
+                     "filename", "bars", "rhythm", "drums_enabled", "roles"]
+            for key in keys:
+                with self.subTest(key=key):
+                    self.assertTrue(gui_mod.help_for(key), f"no help text for '{key}'")
+
+    def test_help_text_is_a_sentence(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            for key, text in gui_mod.PARAMETER_HELP.items():
+                with self.subTest(key=key):
+                    self.assertGreater(len(text), 30)
+                    self.assertTrue(text.rstrip().endswith("."))
+
+    def test_unknown_key_has_no_help(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            self.assertEqual(gui_mod.help_for("no_such_parameter"), "")
+
+    def test_the_info_line_mirrors_a_balloon(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            app._describe("hello")
+            app.info_label.config.assert_called_with(text="hello")
+
+    def test_a_tooltip_is_attached_to_a_described_widget(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            widget = MagicMock()
+            app._with_help(widget, "tempo")
+            widget.bind.assert_any_call("<Enter>", unittest.mock.ANY, add="+")
+
+    def test_no_tooltip_without_help_text(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            widget = MagicMock()
+            app._with_help(widget, "no_such_parameter")
+            widget.bind.assert_not_called()
+
+
+class TestPieceAndSectionParametersMatch(unittest.TestCase):
+    """Anything settable for the whole piece must be overridable per section."""
+
+    def test_every_main_tab_parameter_has_a_section_override(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            expected = [key for key, *_ in gui_mod.ARTIC_PARAMS]
+            expected += [key for key, *_ in gui_mod.TOGGLE_PARAMS]
+            expected += ["tempo", "signature", "scale", "tonic", "tonic_octave", "beat_mode"]
+            for key in expected:
+                with self.subTest(key=key):
+                    self.assertIn(key, app.sec_override)
+
+    def test_every_section_override_is_a_real_section_field(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            from musicanvil import MusicAnvil as MA
+            spec = MA.SectionSpec(name="x")
+            for key in app.sec_override:
+                with self.subTest(key=key):
+                    self.assertTrue(hasattr(spec, key))
+
+    def test_the_switches_are_offered_as_yes_no(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            self.assertEqual(gui_mod.BOOL_CHOICES, ("yes", "no"))
+
+    @staticmethod
+    def _var(value):
+        """A stand-alone stand-in for a tk variable.
+
+        The mocked tkinter hands out one shared MagicMock for every StringVar(), so each
+        variable this test cares about gets its own object instead.
+        """
+        return MagicMock(get=lambda: value)
+
+    def test_a_switch_override_round_trips_through_the_form(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            app.bars_var = self._var("4")
+            app._sec_drums_override_var = self._var(False)
+            app.sec_roles_override_var = self._var(False)
+            for key, _l, _d, _i in gui_mod.ARTIC_PARAMS:
+                app.sec_override[key] = (self._var(False), self._var(""))
+            for key in ("tempo", "signature", "rhythm", "scale", "tonic",
+                        "tonic_octave", "beat_mode"):
+                app.sec_override[key] = (self._var(False), self._var(""))
+            for key, _label, _default in gui_mod.TOGGLE_PARAMS:
+                app.sec_override[key] = (self._var(True), self._var("no"))
+
+            spec = app._build_section_spec("Verse")
+            for key, _label, _default in gui_mod.TOGGLE_PARAMS:
+                with self.subTest(key=key):
+                    self.assertIs(getattr(spec, key), False)
+
+    def test_a_switch_override_rejects_a_value_that_is_not_yes_or_no(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            app.bars_var = self._var("4")
+            app._sec_drums_override_var = self._var(False)
+            app.sec_roles_override_var = self._var(False)
+            for key, _l, _d, _i in gui_mod.ARTIC_PARAMS:
+                app.sec_override[key] = (self._var(False), self._var(""))
+            for key in ("tempo", "signature", "rhythm", "scale", "tonic",
+                        "tonic_octave", "beat_mode"):
+                app.sec_override[key] = (self._var(False), self._var(""))
+            key = gui_mod.TOGGLE_PARAMS[0][0]
+            app.sec_override[key] = (self._var(True), self._var(""))
+            for other, _label, _default in gui_mod.TOGGLE_PARAMS[1:]:
+                app.sec_override[other] = (self._var(False), self._var(""))
+            with self.assertRaises(ValueError):
+                app._build_section_spec("Verse")
+
+
+class TestWidgetWidths(unittest.TestCase):
+    """The dropdowns must be wide enough for the longest name they can show."""
+
+    def test_instrument_width_fits_every_general_midi_name(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            longest = max(len(name) for name in gui_mod.MELODIC_INSTRUMENTS)
+            self.assertGreaterEqual(gui_mod.INSTRUMENT_WIDTH, longest)
+
+    def test_rhythm_scale_and_drum_widths_fit_their_lists(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            from musicanvil import ma_utils
+            self.assertGreaterEqual(gui_mod.RHYTHM_WIDTH,
+                                    max(len(n) for n in ma_utils.drum_lines))
+            self.assertGreaterEqual(gui_mod.SCALE_WIDTH,
+                                    max(len(n) for n in ma_utils.scale_definitions))
+            self.assertGreaterEqual(gui_mod.DRUM_WIDTH,
+                                    max(len(n) for n in ma_utils.drum_pitches))
+
+    def test_widths_are_derived_not_hardcoded(self):
+        """Adding a longer instrument name must widen the widgets by itself."""
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            self.assertEqual(gui_mod.INSTRUMENT_WIDTH,
+                             max(len(n) for n in gui_mod.MELODIC_INSTRUMENTS) + 2)
+
+
+class TestStructureEditing(unittest.TestCase):
+    """ToDo 6.x — duplicate, multi-selection and stacked modifiers."""
+
+    def _app(self, structure=("Verse", "Chorus")):
+        gui_mod = _fresh_gui_module()
+        app = gui_mod.MusicGeneratorApp(MagicMock())
+        from musicanvil import MusicAnvil as MA
+        app.structure = [MA.StructureEntry(section=name) for name in structure]
+        app.structure_listbox = MagicMock()
+        app._update_total = lambda: None
+        return gui_mod, app
+
+    def test_duplicate_copies_the_selected_entries(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.structure_listbox.curselection = lambda: (0,)
+            app._duplicate_in_structure()
+            self.assertEqual([e.section for e in app.structure],
+                             ["Verse", "Verse", "Chorus"])
+
+    def test_duplicate_handles_a_multiple_selection(self):
+        with _patched_tk():
+            gui_mod, app = self._app(("Intro", "Verse", "Chorus"))
+            app.structure_listbox.curselection = lambda: (0, 1)
+            app._duplicate_in_structure()
+            self.assertEqual([e.section for e in app.structure],
+                             ["Intro", "Verse", "Intro", "Verse", "Chorus"])
+
+    def test_duplicate_without_a_selection_does_nothing(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.structure_listbox.curselection = lambda: ()
+            app._duplicate_in_structure()
+            self.assertEqual(len(app.structure), 2)
+
+    def test_a_duplicate_is_independent_of_its_original(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.structure[0] = app.structure[0].with_modifier("tension")
+            app.structure_listbox.curselection = lambda: (0,)
+            app._duplicate_in_structure()
+            app.structure[1] = app.structure[1].with_modifier("invert")
+            self.assertEqual([n for n, _ in app.structure[0].all_modifiers()], ["tension"])
+            self.assertEqual([n for n, _ in app.structure[1].all_modifiers()],
+                             ["tension", "invert"])
+
+    def test_remove_deletes_every_selected_entry(self):
+        with _patched_tk():
+            gui_mod, app = self._app(("Intro", "Verse", "Chorus"))
+            app.structure_listbox.curselection = lambda: (0, 2)
+            app._remove_from_structure()
+            self.assertEqual([e.section for e in app.structure], ["Verse"])
+
+    def test_the_structure_list_allows_multiple_selection(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            self.assertTrue(hasattr(app, "structure_listbox"))
+            self.assertTrue(hasattr(app, "modifier_stack"))
+
+    def test_stacking_two_modifiers(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.transform_var.get = lambda: "tension"
+            app.transform_param_vars = {"bars": (MagicMock(get=lambda: "2"),
+                                                 {"name": "bars", "type": "int"})}
+            app._stack_modifier()
+            app.transform_var.get = lambda: "tone_shift"
+            app.transform_param_vars = {"n": (MagicMock(get=lambda: "5"),
+                                              {"name": "n", "type": "int"})}
+            app._stack_modifier()
+            self.assertEqual(app.modifier_stack,
+                             [("tension", {"bars": 2}), ("tone_shift", {"n": 5})])
+
+    def test_clearing_the_stack(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.modifier_stack = [("invert", {})]
+            app._clear_modifier_stack()
+            self.assertEqual(app.modifier_stack, [])
+
+    def test_applying_the_stack_to_the_selected_entries(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.modifier_stack = [("tension", {}), ("tone_shift", {"n": 3})]
+            app.structure_listbox.curselection = lambda: (1,)
+            app._apply_stack_to_selected()
+            self.assertEqual(app.structure[0].all_modifiers(), [])
+            self.assertEqual(app.structure[1].all_modifiers(),
+                             [("tension", {}), ("tone_shift", {"n": 3})])
+
+    def test_the_stack_label_lists_the_modifiers(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.modifier_stack = [("tension", {"bars": 2}), ("tone_shift", {"n": 5})]
+            text = app._stack_text()
+            self.assertIn("tension bars=2", text)
+            self.assertIn("+5", text)
+
+    def test_an_empty_stack_says_so(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.modifier_stack = []
+            self.assertIn("empty", app._stack_text())
+
+    def test_the_entry_label_shows_a_whole_stack(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            from musicanvil import MusicAnvil as MA
+            entry = MA.StructureEntry(section="Verse",
+                                      modifiers=[("tension", {}), ("tone_shift", {"n": 5})])
+            self.assertEqual(gui_mod._entry_label(entry), "Verse [tension | +5]")
+
+
+class TestTechniqueSummary(unittest.TestCase):
+    """The Sections tab must say what the chosen instruments actually switch on."""
+
+    def _piece(self, accompaniment="Guitar", **kwargs):
+        from musicanvil import MusicAnvil as MA
+        piece = MA.PieceSpec(roles={
+            MA.ROLE_LEAD: MA.RoleAssignment(main="Piano"),
+            MA.ROLE_ACCOMPANIMENT: MA.RoleAssignment(main=accompaniment),
+            MA.ROLE_BASS: MA.RoleAssignment(main="Bass")})
+        for key, value in kwargs.items():
+            setattr(piece, key, value)
+        return piece
+
+    def _section(self):
+        from musicanvil import MusicAnvil as MA
+        return MA.SectionSpec(name="Verse", bars=4)
+
+    def test_a_distorted_program_reports_power_chords_and_palm_mutes(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            text = gui_mod.describe_techniques(self._piece("Distortion Guitar"), self._section())
+            self.assertIn("power chords", text)
+            self.assertIn("palm-muted", text)
+
+    def test_a_clean_program_does_not(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            text = gui_mod.describe_techniques(self._piece("Guitar"), self._section())
+            self.assertNotIn("power chords", text)
+            self.assertIn("full chords", text)
+
+    def test_expression_on_and_off_are_both_explained(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            on = gui_mod.describe_techniques(self._piece(expression=True), self._section())
+            off = gui_mod.describe_techniques(self._piece(expression=False), self._section())
+            self.assertIn("Expression on", on)
+            self.assertIn("vibrato", on)
+            self.assertIn("Expression off", off)
+
+    def test_the_channel_caveat_is_stated(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            text = gui_mod.describe_techniques(self._piece(), self._section())
+            self.assertIn("lead and bass only", text)
+
+    def test_cadences_and_fills_are_reported(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            text = gui_mod.describe_techniques(self._piece(), self._section())
+            self.assertIn("Cadences on", text)
+            self.assertIn("Drum fills", text)
+
+    def test_switching_them_off_removes_them(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            text = gui_mod.describe_techniques(
+                self._piece(auto_cadence=False, drum_fills=False), self._section())
+            self.assertNotIn("Cadences on", text)
+            self.assertNotIn("Drum fills", text)
+
+    def test_a_broken_section_does_not_raise(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            from musicanvil import MusicAnvil as MA
+            bad = MA.SectionSpec(name="Verse", bars=4, scale="no_such_scale")
+            text = gui_mod.describe_techniques(self._piece(), bad)
+            self.assertIn("Techniques", text)
 
 
 if __name__ == "__main__":

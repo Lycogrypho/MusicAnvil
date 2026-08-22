@@ -18,7 +18,24 @@ _GUI = _CFG["gui"]
 _PIECE_DEFAULTS = _CFG["piece_defaults"]
 
 MELODIC_INSTRUMENTS = list(MusicAnvil.INSTRUMENT_PROGRAMS.keys())
+# Widgets are sized from the longest name they must show, so no instrument is clipped
+# (the General MIDI set includes names like "Electric Guitar (muted)").
+INSTRUMENT_WIDTH = max(len(name) for name in MELODIC_INSTRUMENTS) + 2
+RHYTHM_WIDTH = max(len(name) for name in ma_utils.drum_lines) + 2
+SCALE_WIDTH = max(len(name) for name in ma_utils.scale_definitions) + 2
+DRUM_WIDTH = max(len(name) for name in ma_utils.drum_pitches) + 2
+
+# key -> one-sentence explanation, shown as a balloon and in the info line at the bottom
+# of the Main tab. Lives in the configuration so the wording can be edited without code.
+PARAMETER_HELP = _CFG.get("parameter_help", {})
+INFO_HINT = "Hover over a field for an explanation of what it does."
+
+
+def help_for(key):
+    """The explanation of a parameter, or an empty string when none is written yet."""
+    return PARAMETER_HELP.get(key, "")
 NONE_CHOICE = "(none)"
+BOOL_CHOICES = ("yes", "no")
 SIGNATURE_OPTIONS = _GUI["signature_options"]
 OCTAVE_OPTIONS = _GUI["octave_options"]
 TRANSFORMER_OPTIONS = [NONE_CHOICE] + sorted(ma_utils.BEAT_TRANSFORMERS)
@@ -52,18 +69,79 @@ TOGGLE_PARAMS = [
 ]
 
 
+def _modifier_label(name, kwargs):
+    """'invert', '+5', 'tension bars=2' — built from the declared parameters."""
+    if name == "tone_shift":
+        return f"{kwargs.get('n', 0):+d}"
+    shown = " ".join(f"{key}={value}" for key, value in (kwargs or {}).items())
+    return f"{name} {shown}".strip()
+
+
+def describe_techniques(piece, spec):
+    """Explain, in words, what the engine will do to this section.
+
+    Playing technique is not a switch buried in a menu: it follows from the instruments
+    chosen for the section and from the Expression setting. This spells that out so the
+    Sections tab can show it, rather than leaving the user to guess why one part chugs
+    and another rings.
+    """
+    try:
+        resolved = MusicAnvil.resolve_section(spec, piece)
+    except Exception:
+        return "Techniques: (unavailable until the section is valid)"
+
+    lines = []
+    for role in MusicAnvil.ROLES:
+        assignment = resolved.roles.get(role)
+        instrument = getattr(assignment, "main", None)
+        if not instrument:
+            continue
+        if MusicAnvil.is_power_chord_instrument(instrument):
+            lines.append(f"{instrument} ({role}): distorted program — power chords "
+                         f"(root+fifth) and palm-muted off-beats")
+        elif role == MusicAnvil.ROLE_ACCOMPANIMENT:
+            lines.append(f"{instrument} ({role}): full chords, held while the melody fits")
+
+    if resolved.expression:
+        lines.append("Expression on: reverb/chorus sends, a swell or decay across each "
+                     "phrase, vibrato on long notes")
+        lines.append("Pitch bends and slides: lead and bass only (a bend moves the whole "
+                     "MIDI channel, so chords are left alone)")
+    else:
+        lines.append("Expression off: notes only, no controllers or bends")
+
+    if resolved.auto_cadence:
+        lines.append(f"Cadences on: each phrase ends open then closed, over its last "
+                     f"{resolved.cadence_beats} beat(s)")
+    if resolved.drum_fills:
+        lines.append("Drum fills at every phrase boundary")
+    return "Techniques: " + "; ".join(lines) if lines else "Techniques: none"
+
+
+def _as_structure_entry(entry):
+    """Normalise a structure slot to a StructureEntry (plain strings are accepted)."""
+    if isinstance(entry, str):
+        return MusicAnvil.StructureEntry(section=entry)
+    return entry
+
+
+def _copy_structure_entry(entry):
+    """An independent copy of a structure slot, modifiers included."""
+    source = _as_structure_entry(entry)
+    return MusicAnvil.StructureEntry(section=source.section,
+                                     modifiers=source.all_modifiers())
+
+
 def _entry_label(entry):
-    """'Verse', 'Verse [invert]', 'Verse [+5]', 'Verse [tension bars=1]' — built from the
-    transformer's declared parameters, so a new transformer needs no code here."""
+    """'Verse', 'Verse [invert]', 'Verse [+5]', 'Verse [tension bars=1 | +5]' — built from
+    each modifier's declared parameters, so a new transformer needs no code here."""
     if isinstance(entry, str):
         return entry
-    if entry.transformer is None:
+    modifiers = entry.all_modifiers()
+    if not modifiers:
         return entry.section
-    if entry.transformer == "tone_shift":
-        n = entry.transformer_kwargs.get("n", 0)
-        return f"{entry.section} [{n:+d}]"
-    shown = " ".join(f"{key}={value}" for key, value in entry.transformer_kwargs.items())
-    return f"{entry.section} [{entry.transformer}{' ' + shown if shown else ''}]"
+    shown = " | ".join(_modifier_label(name, kwargs) for name, kwargs in modifiers)
+    return f"{entry.section} [{shown}]"
 
 
 def fmt_mmss(seconds):
@@ -78,7 +156,7 @@ def fmt_mmss(seconds):
 # so a saved song can be reopened and edited exactly as it was.
 
 PROJECT_FORMAT = "musicanvil-project"
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 
 # Scalar (non-signature, non-roles) fields shared by PieceSpec and SectionSpec.
 # Version 2 added the phrasing/dynamics fields (ToDo 4.2-4.4). Older project files
@@ -131,18 +209,35 @@ def _section_from_dict(data):
 
 
 def _structure_entry_to_dict(entry):
+    """Serialise one structure slot.
+
+    Version 3 records the full ``modifiers`` stack; ``transformer`` /
+    ``transformer_kwargs`` are still written for the first modifier so an older
+    MusicAnvil can open the file and at least play it with that one.
+    """
     if isinstance(entry, str):
-        return {"section": entry, "transformer": None, "transformer_kwargs": {}}
+        return {"section": entry, "transformer": None, "transformer_kwargs": {},
+                "modifiers": []}
+    modifiers = entry.all_modifiers()
+    first_name, first_kwargs = modifiers[0] if modifiers else (None, {})
     return {"section": entry.section,
-            "transformer": entry.transformer,
-            "transformer_kwargs": dict(entry.transformer_kwargs)}
+            "transformer": first_name,
+            "transformer_kwargs": dict(first_kwargs),
+            "modifiers": [{"name": name, "kwargs": dict(kwargs)}
+                          for name, kwargs in modifiers]}
 
 
 def _structure_entry_from_dict(data):
+    modifiers = data.get("modifiers")
+    if modifiers is None:      # a version 1/2 file: the single-transformer shorthand
+        return MusicAnvil.StructureEntry(
+            section=data["section"],
+            transformer=data.get("transformer"),
+            transformer_kwargs=dict(data.get("transformer_kwargs") or {}),
+        )
     return MusicAnvil.StructureEntry(
         section=data["section"],
-        transformer=data.get("transformer"),
-        transformer_kwargs=dict(data.get("transformer_kwargs") or {}),
+        modifiers=[(item["name"], dict(item.get("kwargs") or {})) for item in modifiers],
     )
 
 
@@ -185,6 +280,61 @@ def project_dict_to_piece(data):
     return piece, data.get("filename", "")
 
 
+class Tooltip:
+    """A balloon that appears next to a widget while the pointer rests on it.
+
+    Also reports the same text to ``on_show`` so the Main tab can mirror it in its info
+    line — hovering explains a parameter without covering the one next to it.
+    """
+
+    DELAY_MS = 400
+
+    def __init__(self, widget, text, on_show=None):
+        self.widget = widget
+        self.text = text
+        self.on_show = on_show
+        self.window = None
+        self.after_id = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        if self.on_show:
+            self.on_show(self.text)
+        self._cancel()
+        self.after_id = self.widget.after(self.DELAY_MS, self._show)
+
+    def _cancel(self):
+        if self.after_id is not None:
+            try:
+                self.widget.after_cancel(self.after_id)
+            except Exception:
+                pass
+            self.after_id = None
+
+    def _show(self):
+        if self.window is not None or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        except Exception:
+            return
+        self.window = tk.Toplevel(self.widget)
+        self.window.wm_overrideredirect(True)
+        self.window.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.window, text=self.text, justify="left", wraplength=380,
+                 background="#ffffe0", relief="solid", borderwidth=1,
+                 padx=6, pady=4).pack()
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
+
+
 def _scrolled_listbox(parent, height, width, selectmode=tk.BROWSE, **kwargs):
     """Return (frame, listbox) with a built-in vertical scrollbar."""
     frame = tk.Frame(parent)
@@ -208,12 +358,14 @@ class DrumEditor:
         tk.Label(frame, text="Rhythm:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
         self.rhythm_var = tk.StringVar(value=list(ma_utils.drum_lines.keys())[0])
         cb = ttk.Combobox(frame, textvariable=self.rhythm_var,
-                          values=list(ma_utils.drum_lines.keys()), state="readonly", width=13)
+                          values=list(ma_utils.drum_lines.keys()), state="readonly",
+                          width=RHYTHM_WIDTH)
         cb.grid(row=0, column=1, padx=4, pady=2)
         cb.bind("<<ComboboxSelected>>", self._fire)
 
         tk.Label(frame, text="Active:").grid(row=1, column=0, sticky="nw", padx=4, pady=2)
-        lf, self.drum_lb = _scrolled_listbox(frame, height=list_height, width=15, selectmode=tk.MULTIPLE)
+        lf, self.drum_lb = _scrolled_listbox(frame, height=list_height, width=DRUM_WIDTH,
+                                            selectmode=tk.MULTIPLE)
         lf.grid(row=1, column=1, padx=4, pady=2)
         for name in DRUM_INSTRUMENTS:
             self.drum_lb.insert(tk.END, name)
@@ -261,11 +413,13 @@ class RoleEditor:
             tk.Label(frame, text="Main:").grid(row=0, column=0, sticky="w")
             var = tk.StringVar(value=defaults.get(role, NONE_CHOICE))
             values = MELODIC_INSTRUMENTS if role == MusicAnvil.ROLE_LEAD else [NONE_CHOICE] + MELODIC_INSTRUMENTS
-            cb = ttk.Combobox(frame, textvariable=var, values=values, state="readonly", width=12)
+            cb = ttk.Combobox(frame, textvariable=var, values=values, state="readonly",
+                              width=INSTRUMENT_WIDTH)
             cb.grid(row=0, column=1, padx=2, pady=2)
             cb.bind("<<ComboboxSelected>>", self._fire)
             tk.Label(frame, text="Supports:").grid(row=1, column=0, sticky="nw")
-            lf, box = _scrolled_listbox(frame, height=list_height, width=14, selectmode=tk.MULTIPLE)
+            lf, box = _scrolled_listbox(frame, height=list_height, width=INSTRUMENT_WIDTH,
+                                        selectmode=tk.MULTIPLE)
             lf.grid(row=1, column=1, padx=2, pady=2)
             for instrument in MELODIC_INSTRUMENTS:
                 box.insert(tk.END, instrument)
@@ -468,15 +622,33 @@ class MusicGeneratorApp:
 
     # ----------------------------------------------------------------- Main tab
 
+    def _describe(self, text):
+        """Mirror a balloon's text in the Main tab's info line."""
+        if getattr(self, "info_label", None) is not None:
+            self.info_label.config(text=text or "")
+
+    def _with_help(self, widget, key, label_widget=None):
+        """Attach the parameter's explanation to a widget (and to its label)."""
+        text = help_for(key)
+        if not text:
+            return widget
+        Tooltip(widget, text, on_show=self._describe)
+        if label_widget is not None:
+            Tooltip(label_widget, text, on_show=self._describe)
+        return widget
+
     def _build_piece_tab(self):
         # ---- Piece Defaults (left column) ----
         defaults = tk.LabelFrame(self.piece_tab, text="Piece Defaults")
         defaults.grid(row=0, column=0, padx=10, pady=10, sticky="nw")
         defaults.columnconfigure(0, minsize=110)
 
-        tk.Label(defaults, text="Tempo (BPM):", anchor="w").grid(row=0, column=0, sticky="ew", padx=5, pady=3)
+        tempo_label = tk.Label(defaults, text="Tempo (BPM):", anchor="w")
+        tempo_label.grid(row=0, column=0, sticky="ew", padx=5, pady=3)
         self.tempo_var = tk.StringVar(value=str(_PIECE_DEFAULTS["tempo"]))
-        tk.Entry(defaults, textvariable=self.tempo_var, width=8).grid(row=0, column=1, sticky="w", padx=5, pady=3)
+        tempo_entry = tk.Entry(defaults, textvariable=self.tempo_var, width=8)
+        tempo_entry.grid(row=0, column=1, sticky="w", padx=5, pady=3)
+        self._with_help(tempo_entry, "tempo", tempo_label)
 
         tk.Label(defaults, text="Signature:", anchor="w").grid(row=1, column=0, sticky="ew", padx=5, pady=3)
         signature_default = "{}/{}".format(*_PIECE_DEFAULTS["signature"])
@@ -515,18 +687,29 @@ class MusicGeneratorApp:
 
         self.artic_vars: dict[str, tk.StringVar] = {}
         for r, (key, label, default, _is_int) in enumerate(ARTIC_PARAMS):
-            tk.Label(artic, text=label, anchor="w").grid(row=r, column=0, sticky="ew", padx=5, pady=3)
+            name = tk.Label(artic, text=label, anchor="w")
+            name.grid(row=r, column=0, sticky="ew", padx=5, pady=3)
             var = tk.StringVar(value=default)
-            tk.Entry(artic, textvariable=var, width=8).grid(row=r, column=1, sticky="w", padx=5, pady=3)
+            entry = tk.Entry(artic, textvariable=var, width=8)
+            entry.grid(row=r, column=1, sticky="w", padx=5, pady=3)
             self.artic_vars[key] = var
+            self._with_help(entry, key, name)
 
         self.toggle_vars = {}
         for offset, (key, label, default) in enumerate(TOGGLE_PARAMS):
             var = tk.BooleanVar(value=default)
-            tk.Checkbutton(artic, text=label, variable=var, anchor="w").grid(
-                row=len(ARTIC_PARAMS) + offset, column=0, columnspan=2,
-                sticky="w", padx=5, pady=2)
+            box = tk.Checkbutton(artic, text=label, variable=var, anchor="w")
+            box.grid(row=len(ARTIC_PARAMS) + offset, column=0, columnspan=2,
+                     sticky="w", padx=5, pady=2)
             self.toggle_vars[key] = var
+            self._with_help(box, key)
+
+        # ---- Info line: explains whatever the pointer is over ----
+        self.info_label = tk.Label(self.piece_tab, text=INFO_HINT, anchor="w",
+                                   justify="left", wraplength=620, relief="groove",
+                                   padx=6, pady=4)
+        self.info_label.grid(row=2, column=0, columnspan=2, padx=10, pady=(0, 10),
+                             sticky="ew")
 
         # ---- Default Roles (below, spanning both columns) ----
         roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
@@ -564,24 +747,32 @@ class MusicGeneratorApp:
         self.sec_override: dict[str, tuple[tk.BooleanVar, tk.StringVar]] = {}
 
         def override_row(row, key, label, widget_values, width):
+            """One 'override this' checkbox plus its value widget.
+
+            ``widget_values`` is None for a free entry, a list for a dropdown, or
+            BOOL_CHOICES for a piece-level switch — so every parameter of the Main tab
+            can be overridden here in the same way.
+            """
             check_var = tk.BooleanVar(value=False)
-            tk.Checkbutton(editor, text=label, variable=check_var).grid(
-                row=row, column=0, sticky="w", padx=5, pady=2)
+            box = tk.Checkbutton(editor, text=label, variable=check_var)
+            box.grid(row=row, column=0, sticky="w", padx=5, pady=2)
             value_var = tk.StringVar()
             if widget_values is None:
-                tk.Entry(editor, textvariable=value_var, width=width).grid(
-                    row=row, column=1, sticky="w", padx=5, pady=2)
+                widget = tk.Entry(editor, textvariable=value_var, width=width)
             else:
-                ttk.Combobox(editor, textvariable=value_var, values=widget_values,
-                             state="readonly", width=width).grid(
-                    row=row, column=1, sticky="w", padx=5, pady=2)
+                widget = ttk.Combobox(editor, textvariable=value_var, values=widget_values,
+                                      state="readonly", width=width)
+            widget.grid(row=row, column=1, sticky="w", padx=5, pady=2)
             self.sec_override[key] = (check_var, value_var)
+            self._with_help(widget, key, box)
 
         # Musical overrides
         override_row(1,  "tempo",       "Override Tempo (BPM)",   None,                               8)
         override_row(2,  "signature",   "Override Signature",     SIGNATURE_OPTIONS,                  6)
-        override_row(3,  "rhythm",      "Override Rhythm",        list(ma_utils.drum_lines.keys()),  14)
-        override_row(4,  "scale",       "Override Scale",         list(ma_utils.scale_definitions.keys()), 14)
+        override_row(3,  "rhythm",      "Override Rhythm",        list(ma_utils.drum_lines.keys()),
+                     RHYTHM_WIDTH)
+        override_row(4,  "scale",       "Override Scale",         list(ma_utils.scale_definitions.keys()),
+                     SCALE_WIDTH)
         override_row(5,  "tonic",       "Override Tonic Note",    ma_utils.notes_in_octave,           6)
         override_row(6,  "tonic_octave","Override Tonic Octave",  OCTAVE_OPTIONS,                     4)
         override_row(7,  "beat_mode",   "Override Beat Mode",     BEAT_MODE_OPTIONS,                 18)
@@ -603,13 +794,29 @@ class MusicGeneratorApp:
         override_row(19, "lead_syncopation",  "Override Syncopation",     None,  6)
         override_row(20, "cadence_beats",     "Override Cadence Beats",   None,  4)
 
+        # Switches: the same three the Main tab offers, so every piece parameter can be
+        # overridden per section (ToDo 6.1).
+        for offset, (key, label, _default) in enumerate(TOGGLE_PARAMS):
+            override_row(21 + offset, key, f"Override {label}", BOOL_CHOICES, 6)
+
         # Drums enabled override (listbox — separate from override_row)
         self._sec_drums_override_var = tk.BooleanVar(value=False)
+        self.technique_label = tk.Label(editor, text="Techniques: —", anchor="w",
+                                        justify="left", wraplength=430, fg="#333333")
+        self.technique_label.grid(row=20 + len(TOGGLE_PARAMS), column=0, columnspan=2,
+                                  sticky="w", padx=5, pady=(6, 2))
+        Tooltip(self.technique_label,
+                "What the engine will actually do to this section, given the instruments "
+                "and switches above. Distortion, power chords and palm mutes follow from "
+                "the instrument you pick, not from a separate setting.",
+                on_show=self._describe)
+
+        drums_row = 22 + len(TOGGLE_PARAMS)
         tk.Checkbutton(editor, text="Override Drums Enabled",
                        variable=self._sec_drums_override_var).grid(
-            row=21, column=0, sticky="w", padx=5, pady=2)
+            row=drums_row, column=0, sticky="w", padx=5, pady=2)
         dlf, self._sec_drums_lb = _scrolled_listbox(editor, height=4, width=15, selectmode=tk.MULTIPLE)
-        dlf.grid(row=21, column=1, padx=5, pady=2, sticky="w")
+        dlf.grid(row=drums_row, column=1, padx=5, pady=2, sticky="w")
         for name in DRUM_INSTRUMENTS:
             self._sec_drums_lb.insert(tk.END, name)
         self._sec_drums_lb.selection_set(0, tk.END)
@@ -641,12 +848,14 @@ class MusicGeneratorApp:
         structure = tk.LabelFrame(self.structure_tab, text="Piece Structure")
         structure.grid(row=0, column=0, padx=10, pady=10, sticky="n")
 
-        lf, self.structure_listbox = _scrolled_listbox(structure, height=14, width=26)
+        # EXTENDED so several occurrences can be duplicated, removed or modified at once.
+        lf, self.structure_listbox = _scrolled_listbox(structure, height=14, width=34,
+                                                       selectmode=tk.EXTENDED)
         lf.grid(row=0, column=0, columnspan=3, padx=5, pady=5)
 
         self.add_section_var = tk.StringVar()
         self.add_section_combo = ttk.Combobox(structure, textvariable=self.add_section_var,
-                                              values=[], state="readonly", width=16)
+                                              values=[], state="readonly", width=20)
         self.add_section_combo.grid(row=1, column=0, columnspan=2, padx=5, pady=3)
         tk.Button(structure, text="Add", command=self._add_to_structure).grid(row=1, column=2, padx=5, pady=3)
 
@@ -664,14 +873,31 @@ class MusicGeneratorApp:
         self.transform_var.trace_add("write", self._on_transform_changed)
         self._build_transformer_params()
 
-        tk.Button(structure, text="Remove", command=self._remove_from_structure).grid(row=3, column=0, padx=5, pady=3)
-        tk.Button(structure, text="Move Up", command=lambda: self._move_in_structure(-1)).grid(row=3, column=1, padx=5, pady=3)
-        tk.Button(structure, text="Move Down", command=lambda: self._move_in_structure(1)).grid(row=3, column=2, padx=5, pady=3)
+        # A modifier is added to this stack, and the whole stack goes on the next
+        # occurrence added — or onto the occurrences already selected. Stacking is what
+        # lets one section both build tension and change key.
+        stack_frame = tk.Frame(structure)
+        stack_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=2, sticky="w")
+        tk.Button(stack_frame, text="Stack modifier",
+                  command=self._stack_modifier).grid(row=0, column=0, padx=(0, 4))
+        tk.Button(stack_frame, text="Clear stack",
+                  command=self._clear_modifier_stack).grid(row=0, column=1, padx=4)
+        tk.Button(stack_frame, text="Apply stack to selected",
+                  command=self._apply_stack_to_selected).grid(row=0, column=2, padx=4)
+        self.modifier_stack = []
+        self.stack_label = tk.Label(structure, text=self._stack_text(), anchor="w",
+                                    justify="left", wraplength=320, fg="#333333")
+        self.stack_label.grid(row=4, column=0, columnspan=3, padx=5, sticky="w")
+
+        tk.Button(structure, text="Remove", command=self._remove_from_structure).grid(row=5, column=0, padx=5, pady=3)
+        tk.Button(structure, text="Duplicate", command=self._duplicate_in_structure).grid(row=5, column=1, padx=5, pady=3)
+        tk.Button(structure, text="Move Up", command=lambda: self._move_in_structure(-1)).grid(row=6, column=0, padx=5, pady=3)
+        tk.Button(structure, text="Move Down", command=lambda: self._move_in_structure(1)).grid(row=6, column=1, padx=5, pady=3)
 
         self.total_label = tk.Label(structure, text="Total duration: 00:00")
-        self.total_label.grid(row=4, column=0, columnspan=3, pady=5)
+        self.total_label.grid(row=7, column=0, columnspan=3, pady=5)
 
-        tk.Button(structure, text="Generate", command=self._generate).grid(row=5, column=0, columnspan=3, pady=10)
+        tk.Button(structure, text="Generate", command=self._generate).grid(row=8, column=0, columnspan=3, pady=10)
 
     def _build_transformer_params(self):
         """Rebuild the parameter widgets for the selected transformer."""
@@ -718,21 +944,97 @@ class MusicGeneratorApp:
     def _on_transform_changed(self, *_):
         self._build_transformer_params()
 
+    def _stack_text(self):
+        if not getattr(self, "modifier_stack", None):
+            return "Modifier stack: (empty) — pick a modifier above and press Stack modifier."
+        shown = " | ".join(_modifier_label(name, kwargs) for name, kwargs in self.modifier_stack)
+        return f"Modifier stack: {shown}"
+
+    def _refresh_stack_label(self):
+        self.stack_label.config(text=self._stack_text())
+
+    def _current_modifier(self):
+        """The modifier currently selected in the combo, or None."""
+        name = self.transform_var.get()
+        if name not in ma_utils.BEAT_TRANSFORMERS:
+            return None
+        return name, self._transformer_kwargs()
+
+    def _stack_modifier(self):
+        """Append the selected modifier to the stack applied to the next occurrence."""
+        try:
+            modifier = self._current_modifier()
+        except ValueError as exc:
+            messagebox.showerror("Error", str(exc))
+            return
+        if modifier is None:
+            messagebox.showerror("Error", "Pick a modifier first.")
+            return
+        self.modifier_stack.append(modifier)
+        self._refresh_stack_label()
+
+    def _clear_modifier_stack(self):
+        self.modifier_stack = []
+        self._refresh_stack_label()
+
+    def _apply_stack_to_selected(self):
+        """Add the stacked modifiers to every selected occurrence."""
+        selection = list(self.structure_listbox.curselection())
+        if not selection:
+            messagebox.showerror("Error", "Select one or more occurrences first.")
+            return
+        stack = list(self.modifier_stack)
+        if not stack:
+            try:
+                modifier = self._current_modifier()
+            except ValueError as exc:
+                messagebox.showerror("Error", str(exc))
+                return
+            if modifier is None:
+                messagebox.showerror("Error", "Stack a modifier, or pick one, first.")
+                return
+            stack = [modifier]
+        for index in selection:
+            entry = _as_structure_entry(self.structure[index])
+            for name, kwargs in stack:
+                entry = entry.with_modifier(name, **kwargs)
+            self.structure[index] = entry
+            self.structure_listbox.delete(index)
+            self.structure_listbox.insert(index, _entry_label(entry))
+        for index in selection:
+            self.structure_listbox.selection_set(index)
+        self._update_total()
+
+    def _duplicate_in_structure(self):
+        """Copy every selected occurrence, inserting the copies after the selection."""
+        selection = list(self.structure_listbox.curselection())
+        if not selection:
+            return
+        copies = [_copy_structure_entry(self.structure[index]) for index in selection]
+        target = selection[-1] + 1
+        for offset, entry in enumerate(copies):
+            self.structure.insert(target + offset, entry)
+            self.structure_listbox.insert(target + offset, _entry_label(entry))
+        self.structure_listbox.selection_clear(0, tk.END)
+        for offset in range(len(copies)):
+            self.structure_listbox.selection_set(target + offset)
+        self._update_total()
+
     def _add_to_structure(self):
         name = self.add_section_var.get()
         if not name:
             messagebox.showerror("Error", "Create a section in the Sections tab first, then pick it here.")
             return
-        transformer = self.transform_var.get()
-        transformer = None if transformer == NONE_CHOICE else transformer
-        kwargs = {}
-        if transformer is not None:
+        modifiers = list(getattr(self, "modifier_stack", []))
+        if not modifiers:
             try:
-                kwargs = self._transformer_kwargs()
+                current = self._current_modifier()
             except ValueError as exc:
                 messagebox.showerror("Error", str(exc))
                 return
-        entry = MusicAnvil.StructureEntry(section=name, transformer=transformer, transformer_kwargs=kwargs)
+            if current is not None:
+                modifiers = [current]
+        entry = MusicAnvil.StructureEntry(section=name, modifiers=modifiers)
         self.structure.append(entry)
         self.structure_listbox.insert(tk.END, _entry_label(entry))
         idx = self.structure_listbox.size() - 1
@@ -742,12 +1044,13 @@ class MusicGeneratorApp:
         self._update_total()
 
     def _remove_from_structure(self):
-        selection = self.structure_listbox.curselection()
+        """Remove every selected occurrence (highest index first, so the rest stay put)."""
+        selection = sorted(self.structure_listbox.curselection(), reverse=True)
         if not selection:
             return
-        index = selection[0]
-        self.structure_listbox.delete(index)
-        del self.structure[index]
+        for index in selection:
+            self.structure_listbox.delete(index)
+            del self.structure[index]
         self._update_total()
 
     def _move_in_structure(self, delta):
@@ -860,6 +1163,14 @@ class MusicGeneratorApp:
             check_var.set(value is not None)
             value_var.set("" if value is None else str(value))
 
+        # Switch overrides
+        for key, _label, _default in TOGGLE_PARAMS:
+            value = getattr(spec, key, None)
+            check_var, value_var = self.sec_override[key]
+            check_var.set(value is not None)
+            value_var.set("" if value is None
+                          else (BOOL_CHOICES[0] if value else BOOL_CHOICES[1]))
+
         # Drums enabled override
         has_drums_override = spec.drums_enabled is not None
         self._sec_drums_override_var.set(has_drums_override)
@@ -875,6 +1186,7 @@ class MusicGeneratorApp:
         self.sec_roles_override_var.set(bool(spec.roles))
         self.sec_roles.set_roles(spec.roles if spec.roles else {})
         self._update_section_duration(spec)
+        self._update_technique_summary(spec)
         self._autosave_enabled = True
 
     # -------------------------------------------------------- Auto-save logic
@@ -889,6 +1201,7 @@ class MusicGeneratorApp:
             spec = self._build_section_spec(name)
             self.sections[name] = spec
             self._update_section_duration(spec)
+            self._update_technique_summary(spec)
             self._refresh_section_choices()
             self._update_total()
         except (ValueError, KeyError):
@@ -929,6 +1242,15 @@ class MusicGeneratorApp:
                 raw = value_var.get()
                 setattr(spec, key, int(raw) if is_int else float(raw))
 
+        # Switch overrides ("yes"/"no" -> True/False)
+        for key, _label, _default in TOGGLE_PARAMS:
+            check_var, value_var = self.sec_override[key]
+            if check_var.get():
+                raw = value_var.get()
+                if raw not in BOOL_CHOICES:
+                    raise ValueError(f"Pick {' or '.join(BOOL_CHOICES)} for overridden {key}.")
+                setattr(spec, key, raw == BOOL_CHOICES[0])
+
         # Drums enabled override
         if self._sec_drums_override_var.get():
             sel = list(self._sec_drums_lb.curselection())
@@ -938,6 +1260,16 @@ class MusicGeneratorApp:
         if self.sec_roles_override_var.get():
             spec.roles = self.sec_roles.get_roles()
         return spec
+
+    def _update_technique_summary(self, spec):
+        """Refresh the plain-language summary of this section's techniques."""
+        if getattr(self, "technique_label", None) is None:
+            return
+        try:
+            piece = self._current_piece_spec(require_lead=False)
+            self.technique_label.config(text=describe_techniques(piece, spec))
+        except Exception:
+            self.technique_label.config(text="Techniques: (unavailable until the piece is valid)")
 
     def _update_section_duration(self, spec):
         try:

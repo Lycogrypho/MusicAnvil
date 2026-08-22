@@ -114,6 +114,8 @@ python musicanvil/MusicAnvil_GUI.py
 ```
 
 The GUI is organised into three tabs, with a **File** menu for saving and loading projects.
+Every parameter explains itself: hover over a field for a balloon, and the same text appears
+in the info line at the bottom of the Main tab.
 
 ### File menu
 
@@ -162,6 +164,9 @@ Fine-tune how notes are shaped in the generated output. Every parameter here —
 - **Drums**: rhythm pattern dropdown (Rock, Jazz, Bossa Nova, …) and a multi-select list of which drum voices are active.
 - **Lead / Accompaniment / Bass**: main instrument dropdown and a multi-select list of support instruments for each role. Support instruments double their role's main line at a lower velocity, filtered by position (lead supports play even beats only, accompaniment supports play the first half of each bar, bass supports play bar-downbeats only).
 
+Every parameter on this tab can be overridden per section in the Sections tab — including
+the three switches, which appear there as yes/no dropdowns.
+
 ### Sections tab
 
 Manages the section library and the section editor. Six default sections are pre-created: **Intro**, **Verse**, **Chorus**, **Solo**, **Bridge**, **Outro**. New sections can be added or deleted at any time.
@@ -176,6 +181,12 @@ Each section can override any piece default independently:
 - Lead, Accompaniment, and Bass role assignments
 
 Fields left unchecked inherit the piece default.
+
+The section editor also shows a live **Techniques** line: what the engine will actually do
+to this section given the instruments and switches chosen — power chords and palm mutes for
+a distorted program, what expression is writing, which roles get pitch bends, whether
+cadences and drum fills are on. Playing technique follows from the instrument you pick, not
+from a separate setting, and this is where that becomes visible.
 
 ### Piece Structure tab
 
@@ -682,7 +693,7 @@ Notes use sharps only (`C#`, not `Db`). Percussion always uses MIDI channel 10.
 
 ## Tests
 
-Run the test suite (573 tests):
+Run the test suite (606 tests):
 
 ```
 .venv\Scripts\python -m pytest tests/ -v

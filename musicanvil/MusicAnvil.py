@@ -121,19 +121,43 @@ class SectionSpec:
 
 @dataclass
 class StructureEntry:
-    """One slot in the piece structure: a section name plus an optional beat transformer.
+    """One slot in the piece structure: a section name plus any number of modifiers.
 
-    ``transformer`` must be a key in ``ma_utils.BEAT_TRANSFORMERS`` or ``None``.
-    ``transformer_kwargs`` is forwarded verbatim as keyword arguments to the transformer
-    function, so ``{"n": 3}`` is the right value for ``tone_shift``. A *note* transformer
-    is applied to each instrument's notes; a *phrase* transformer receives the whole
-    rendered section in musical time (see ``ma_utils.TRANSFORMER_PHRASE``).
+    A modifier is ``(transformer_name, kwargs)``; the name must be a key in
+    ``ma_utils.BEAT_TRANSFORMERS`` and the kwargs are forwarded verbatim, so
+    ``("tone_shift", {"n": 3})`` transposes. Several can be stacked on one occurrence —
+    ``[("tension", {}), ("tone_shift", {"n": 5})]`` builds tension *and* transposes — and
+    they are applied in order, phrase modifiers first (they reshape the section while it
+    is still in musical time), then note modifiers on the resulting notes.
+
+    ``transformer`` / ``transformer_kwargs`` remain as the single-modifier shorthand and
+    as the form older project files use; ``all_modifiers()`` normalises both.
     Plain strings are also accepted wherever a ``StructureEntry`` is expected — use
     ``_as_entry()`` to normalise them.
     """
     section: str
     transformer: str | None = None
     transformer_kwargs: dict = field(default_factory=dict)
+    modifiers: list = field(default_factory=list)
+
+    def all_modifiers(self):
+        """Every modifier on this entry as ``[(name, kwargs), ...]``, shorthand first."""
+        stacked = []
+        if self.transformer is not None:
+            stacked.append((self.transformer, dict(self.transformer_kwargs)))
+        for modifier in self.modifiers:
+            if isinstance(modifier, str):
+                stacked.append((modifier, {}))
+            else:
+                name, kwargs = modifier
+                stacked.append((name, dict(kwargs or {})))
+        return stacked
+
+    def with_modifier(self, name, **kwargs):
+        """Return a copy of this entry with one more modifier appended."""
+        return StructureEntry(section=self.section, transformer=self.transformer,
+                              transformer_kwargs=dict(self.transformer_kwargs),
+                              modifiers=list(self.modifiers) + [(name, kwargs)])
 
 
 @dataclass
@@ -1865,18 +1889,23 @@ def render_piece(piece, rng=None):
         if entry.section not in rendered:
             rendered[entry.section] = _render_section_events(resolved, rng)
         section = rendered[entry.section]
-        if entry.transformer is not None and \
-                ma_utils.transformer_kind(entry.transformer) == ma_utils.TRANSFORMER_PHRASE:
-            # Phrase transformers reshape the section in musical time, across every
-            # role at once, before it is flattened into notes.
-            fn = ma_utils.get_transformer(entry.transformer)
-            section = fn(section.copy(), **entry.transformer_kwargs)
+        modifiers = entry.all_modifiers()
+        phrase_modifiers = [(name, kwargs) for name, kwargs in modifiers
+                            if ma_utils.transformer_kind(name) == ma_utils.TRANSFORMER_PHRASE]
+        note_modifiers = [(name, kwargs) for name, kwargs in modifiers
+                          if ma_utils.transformer_kind(name) == ma_utils.TRANSFORMER_NOTE]
+        if phrase_modifiers:
+            # Phrase modifiers reshape the section in musical time, across every role at
+            # once, before it is flattened into notes. The copy keeps the cached section
+            # (reused by the other occurrences) untouched.
+            section = section.copy()
+            for name, kwargs in phrase_modifiers:
+                section = ma_utils.get_transformer(name)(section, **kwargs)
         tracks, length = section.tracks(), section.length
-        if entry.transformer is not None and \
-                ma_utils.transformer_kind(entry.transformer) == ma_utils.TRANSFORMER_NOTE:
-            fn = ma_utils.get_transformer(entry.transformer)
+        for name, kwargs in note_modifiers:
+            fn = ma_utils.get_transformer(name)
             tracks = {
-                inst: (notes if inst == DRUM_TRACK else fn(notes, **entry.transformer_kwargs))
+                inst: (notes if inst == DRUM_TRACK else fn(notes, **kwargs))
                 for inst, notes in tracks.items()
             }
         for instrument, notes in tracks.items():

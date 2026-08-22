@@ -268,6 +268,36 @@
     "section_bars": 4
   },
 
+  "parameter_help": {
+    "tempo": "Speed in beats per minute. 60 is a slow ballad, 120 a pop song, 180+ punk or metal.",
+    "signature": "Time signature: beats per bar over the note value that counts as one beat. 4/4 is the default, 3/4 a waltz, 6/8 a compound lilt.",
+    "scale": "The set of notes everything is drawn from. Major sounds bright, natural_minor dark, blues gritty, pentatonic_* safe and open.",
+    "tonic": "The note the scale is built on, and the note a closed phrase comes home to.",
+    "tonic_octave": "Register of the tonic. 4 puts middle C at the bottom of the scale; lower it for a darker part, raise it for a brighter one.",
+    "beat_mode": "The grid the melody is written on. Fixed 16th gives the same rhythmic detail in any signature; half-beat follows the signature instead.",
+    "filename": "Default name offered when the piece is saved as a .mid file.",
+    "bars": "Length of this section, in bars.",
+    "rhythm": "Drum pattern genre for this section.",
+    "drums_enabled": "Which drums of the pattern actually play. Strip it down for an intro, restore everything for a chorus.",
+    "roles": "Which instrument plays each role. A support instrument doubles part of its role's main line.",
+    "lead_rest_prob": "Chance that a slot in the melody is silent instead of a note. 0 is a wall of notes, 0.3 leaves plenty of air.",
+    "lead_sustain": "How much of its slot a melody note actually sounds for. Below 1 leaves a gap before the next note; above 1 overlaps them.",
+    "lead_velocity_jitter": "Random loudness variation per melody note. This is humanisation only - the musical emphasis comes from Metric Accent.",
+    "lead_step_bias": "How often the melody steps to a neighbouring scale note instead of leaping. High values sing, low values skitter.",
+    "bass_gate": "How much of its beat a bass note sounds for. Lower values make the bass shorter and punchier.",
+    "chord_gate": "How much of its span a chord sounds for. Lower values let the chords breathe between strikes.",
+    "chord_octave_shift": "How far below the melody the chords are voiced, in octaves. -2 is the default; -1 crowds the tune, -3 opens a gap.",
+    "phrase_bars": "Length of a phrase, in bars. 0 chooses one for you: half the section, at most four bars. Phrases alternate question and answer.",
+    "metric_accent": "How much louder the downbeat is than a plain beat, in MIDI velocity. 0 switches metric emphasis off entirely.",
+    "intensity": "Velocity multiplier for the whole section. Use it to make an intro quieter and a chorus louder than the verse.",
+    "final_lengthening": "How much the last note of each phrase is stretched. 1.0 is off; performers naturally slow into a phrase ending.",
+    "lead_syncopation": "How often the melody is pushed off the beat, and how often a long note ties across one. 0 stays square.",
+    "cadence_beats": "How many beats at the end of each phrase are reshaped into its cadence.",
+    "auto_cadence": "Give every phrase an ending: a question (open, on an unstable note over the fifth) then an answer (closed, on the tonic).",
+    "drum_fills": "Play a fill into every phrase boundary and crash on the landing.",
+    "expression": "Write performance data as well as notes: reverb and chorus sends, swells within a phrase, pitch bends, slides and vibrato."
+  },
+
   "gui": {
     "signature_options": ["4/4", "2/2", "2/4", "3/4", "5/4", "2/8", "4/8", "6/8", "8/8", "9/8", "12/8", "4/16", "6/16", "8/16", "12/16", "16/16"],
     "octave_options": ["2", "3", "4", "5", "6"],
