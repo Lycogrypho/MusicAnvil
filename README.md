@@ -582,7 +582,9 @@ The values below are the shipped defaults, all defined in `musicanvil/MusicAnvil
 
 ### Available Melodic Instruments
 
-`Piano`, `Organ`, `Guitar`, `Electric Guitar`, `Bass`, `Violin`, `Strings`, `Trumpet`, `Sax`, `Flute`.
+`Piano`, `Organ`, `Guitar`, `Electric Guitar`, `Bass`, `Electric Bass`, `Violin`, `Strings`, `Trumpet`, `Sax`, `Flute`.
+
+The names map to General MIDI programs in `instrument_programs` (`Bass` is GM 32, Acoustic Bass; `Electric Bass` is GM 33, Electric Bass (finger)). Add an entry there to offer any other GM sound — it appears in the GUI dropdowns automatically.
 
 ### Drum MIDI Pitches
 

@@ -1736,6 +1736,42 @@ class TestDrumFills(unittest.TestCase):
             section.drums)
 
 
+class TestInstrumentPrograms(unittest.TestCase):
+    """Every offered instrument must name a real General MIDI program."""
+
+    def test_electric_bass_is_available(self):
+        self.assertIn("Electric Bass", MusicAnvil.INSTRUMENT_PROGRAMS)
+
+    def test_electric_bass_maps_to_the_gm_electric_bass(self):
+        program = MusicAnvil.INSTRUMENT_PROGRAMS["Electric Bass"]
+        self.assertIn("Electric Bass", pretty_midi.program_to_instrument_name(program))
+
+    def test_acoustic_and_electric_bass_are_distinct(self):
+        self.assertNotEqual(MusicAnvil.INSTRUMENT_PROGRAMS["Bass"],
+                            MusicAnvil.INSTRUMENT_PROGRAMS["Electric Bass"])
+
+    def test_every_program_is_a_valid_gm_number(self):
+        for name, program in MusicAnvil.INSTRUMENT_PROGRAMS.items():
+            with self.subTest(instrument=name):
+                self.assertIsInstance(program, int)
+                self.assertGreaterEqual(program, 0)
+                self.assertLessEqual(program, 127)
+                self.assertTrue(pretty_midi.program_to_instrument_name(program))
+
+    def test_programs_are_unique(self):
+        programs = list(MusicAnvil.INSTRUMENT_PROGRAMS.values())
+        self.assertEqual(len(programs), len(set(programs)))
+
+    def test_a_piece_renders_with_the_electric_bass(self):
+        piece = _make_piece(bars=2)
+        piece.roles[MusicAnvil.ROLE_BASS] = MusicAnvil.RoleAssignment(main="Electric Bass")
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        track = [inst for inst in midi.instruments if inst.name == "Electric Bass"]
+        self.assertEqual(len(track), 1)
+        self.assertEqual(track[0].program, MusicAnvil.INSTRUMENT_PROGRAMS["Electric Bass"])
+        self.assertTrue(track[0].notes)
+
+
 class TestTempoInternalsGuard(unittest.TestCase):
     """ToDo 2.1 — _insert_midi_tempo_change reaches into private pretty_midi members.
 
