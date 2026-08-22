@@ -582,9 +582,40 @@ The values below are the shipped defaults, all defined in `musicanvil/MusicAnvil
 
 ### Available Melodic Instruments
 
-`Piano`, `Organ`, `Guitar`, `Electric Guitar`, `Bass`, `Electric Bass`, `Violin`, `Strings`, `Trumpet`, `Sax`, `Flute`.
+**All 128 General MIDI programs are selectable**, under their standard names
+(`Acoustic Grand Piano`, `Overdriven Guitar`, `Distortion Guitar`, `Slap Bass 1`,
+`Fretless Bass`, `Church Organ`, …).
 
-The names map to General MIDI programs in `instrument_programs` (`Bass` is GM 32, Acoustic Bass; `Electric Bass` is GM 33, Electric Bass (finger)). Add an entry there to offer any other GM sound — it appears in the GUI dropdowns automatically.
+The list opens with the curated short names from `instrument_programs` in the
+configuration, which is what the GUI offers first:
+
+`Piano`, `Organ`, `Guitar`, `Electric Guitar`, `Bass`, `Electric Bass`, `Violin`,
+`Strings`, `Trumpet`, `Sax`, `Flute`.
+
+Each of those is an alias for a GM program (`Bass` = GM 32 Acoustic Bass, `Electric Bass`
+= GM 33 Electric Bass (finger)), and the rest of the General MIDI set is merged in after
+them by `MusicAnvil.INSTRUMENT_PROGRAMS`. Add or rename an entry in the config to change
+what a short name means, or to introduce a new one — a curated name always wins over the
+GM name for the same program.
+
+#### Guitar and bass timbres
+
+A MIDI file carries instructions, not audio, so distortion is a property of the *sound*
+selected, not something stored in the file. General MIDI already provides the distorted
+timbres — `Overdriven Guitar` (29), `Distortion Guitar` (30), `Guitar Harmonics` (31),
+`Guitar Fret Noise` (120) — and for bass `Electric Bass (pick)` (34), `Fretless Bass`
+(35), `Slap Bass 1/2` (36/37) and the synth basses (38/39); selecting one is all it takes.
+
+Beyond the choice of program, a GM-compliant player also responds to control changes:
+CC 91 reverb send, CC 93 chorus send, CC 1 modulation, CC 11 expression, CC 7 volume,
+CC 10 pan, CC 64 sustain (GM2/GS/XG add CC 92 tremolo and CC 95 phaser). There is **no**
+standard controller for "distortion amount" — that lives in the preset. MusicAnvil does
+not emit control changes or pitch bends yet (see ToDo P5); when it does, `pretty_midi`
+carries them through `Instrument.control_changes` and `Instrument.pitch_bends`.
+
+For a real amp/cabinet character, palm mutes or slides with finger noise, play the
+generated `.mid` through a sampled library or amp simulator (SF2/SFZ soundfont, or a VST),
+or render a clean guitar patch and apply a distortion plugin afterwards.
 
 ### Drum MIDI Pitches
 

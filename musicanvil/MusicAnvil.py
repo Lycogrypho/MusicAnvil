@@ -59,7 +59,17 @@ _CFG = ma_utils.load_config()
 _PIECE_DEFAULTS = _CFG["piece_defaults"]
 
 # Melodic instrument name -> General MIDI program number.
-INSTRUMENT_PROGRAMS = _CFG["instrument_programs"]
+#
+# The config holds the short curated names the GUI offers first ("Piano", "Electric
+# Bass", ...); the complete General MIDI set is then merged in under its standard names
+# ("Acoustic Grand Piano", "Distortion Guitar", ...) so every GM sound is selectable
+# without listing a 128-entry standard in the configuration file. A curated name always
+# wins, so the config keeps the last word on what a name means.
+GM_PROGRAM_COUNT = 128
+INSTRUMENT_PROGRAMS = dict(_CFG["instrument_programs"])
+for _program in range(GM_PROGRAM_COUNT):
+    INSTRUMENT_PROGRAMS.setdefault(pretty_midi.program_to_instrument_name(_program), _program)
+del _program
 
 _VELOCITIES = _CFG["velocities"]
 VELOCITY_LEAD = _VELOCITIES["lead"]
@@ -1521,7 +1531,7 @@ def render_piece(piece, rng=None):
 
 __all__ = [
     "ROLE_LEAD", "ROLE_ACCOMPANIMENT", "ROLE_BASS", "ROLES", "DRUM_TRACK",
-    "INSTRUMENT_PROGRAMS",
+    "INSTRUMENT_PROGRAMS", "GM_PROGRAM_COUNT",
     "VELOCITY_LEAD", "VELOCITY_BASS", "VELOCITY_CHORD", "VELOCITY_SUPPORT",
     "RoleAssignment", "SectionSpec", "StructureEntry", "PieceSpec", "ResolvedSection",
     "Phrase", "RenderContext", "NoteEvent", "RenderedSection",

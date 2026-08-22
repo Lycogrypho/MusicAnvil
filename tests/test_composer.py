@@ -400,7 +400,7 @@ class TestRenderPiece(unittest.TestCase):
     def test_known_instrument_names_do_not_raise(self):
         """Every name in INSTRUMENT_PROGRAMS must render without error."""
         for name in MusicAnvil.INSTRUMENT_PROGRAMS:
-            piece = _make_piece(structure=["A"])
+            piece = _make_piece(structure=["A"], bars=1)
             piece.roles[MusicAnvil.ROLE_LEAD] = MusicAnvil.RoleAssignment(main=name)
             try:
                 MusicAnvil.render_piece(piece, random.Random(1))
@@ -1758,9 +1758,56 @@ class TestInstrumentPrograms(unittest.TestCase):
                 self.assertLessEqual(program, 127)
                 self.assertTrue(pretty_midi.program_to_instrument_name(program))
 
-    def test_programs_are_unique(self):
-        programs = list(MusicAnvil.INSTRUMENT_PROGRAMS.values())
-        self.assertEqual(len(programs), len(set(programs)))
+    def test_the_whole_general_midi_set_is_selectable(self):
+        """Every GM program must be reachable under its standard name."""
+        for program in range(MusicAnvil.GM_PROGRAM_COUNT):
+            name = pretty_midi.program_to_instrument_name(program)
+            with self.subTest(program=program, name=name):
+                self.assertIn(name, MusicAnvil.INSTRUMENT_PROGRAMS)
+                self.assertEqual(MusicAnvil.INSTRUMENT_PROGRAMS[name], program)
+
+    def test_distorted_guitar_programs_are_offered(self):
+        for name in ("Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics"):
+            with self.subTest(name=name):
+                self.assertIn(name, MusicAnvil.INSTRUMENT_PROGRAMS)
+
+    def test_curated_names_come_first_and_are_unique(self):
+        """The config's short names lead the list (so the GUI offers them first) and no
+        two of them mean different things."""
+        curated = ma_utils.get_param("instrument_programs", default={})
+        self.assertTrue(curated)
+        self.assertEqual(len(set(curated.values())), len(curated))
+        self.assertEqual(list(MusicAnvil.INSTRUMENT_PROGRAMS)[:len(curated)], list(curated))
+
+    def test_every_duplicate_program_is_a_curated_alias(self):
+        """A program may be named twice only when a curated short name aliases it."""
+        curated = ma_utils.get_param("instrument_programs", default={})
+        seen = {}
+        for name, program in MusicAnvil.INSTRUMENT_PROGRAMS.items():
+            seen.setdefault(program, []).append(name)
+        for program, names in seen.items():
+            with self.subTest(program=program):
+                self.assertLessEqual(len(names), 2)
+                if len(names) == 2:
+                    self.assertIn(names[0], curated)
+                    self.assertEqual(names[1],
+                                     pretty_midi.program_to_instrument_name(program))
+
+    def test_a_curated_alias_and_its_gm_name_render_the_same_program(self):
+        for alias in ("Piano", "Electric Bass"):
+            with self.subTest(alias=alias):
+                program = MusicAnvil.INSTRUMENT_PROGRAMS[alias]
+                self.assertEqual(
+                    MusicAnvil.INSTRUMENT_PROGRAMS[
+                        pretty_midi.program_to_instrument_name(program)], program)
+
+    def test_a_piece_renders_with_a_general_midi_name(self):
+        piece = _make_piece(bars=1)
+        piece.roles[MusicAnvil.ROLE_LEAD] = MusicAnvil.RoleAssignment(main="Distortion Guitar")
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        track = [inst for inst in midi.instruments if inst.name == "Distortion Guitar"]
+        self.assertEqual(len(track), 1)
+        self.assertEqual(track[0].program, 30)
 
     def test_a_piece_renders_with_the_electric_bass(self):
         piece = _make_piece(bars=2)
