@@ -170,6 +170,29 @@
     "chromatic":        []
   },
 
+  "power_chord_programs": [29, 30, 31],
+
+  "keyswitches": {},
+
+  "expression": {
+    "reverb_send": {"Lead": 46, "Accompaniment": 34, "Bass": 16, "Drums": 24},
+    "chorus_send": {"Lead": 20, "Accompaniment": 26, "Bass": 6, "Drums": 0},
+    "swell_steps": 4,
+    "swell_range": [86, 120],
+    "decay_range": [118, 84],
+    "vibrato_beats": 2.0,
+    "vibrato_depth": 42,
+    "bend_depth": 4096,
+    "bend_steps": 3,
+    "bend_share": 0.35,
+    "slide_semitones": 2,
+    "palm_mute_gate": 0.34,
+    "fret_noise": false,
+    "fret_noise_velocity": 38,
+    "portamento": false,
+    "portamento_time": 24
+  },
+
   "drum_fill": {
     "pitches": ["Tom 1", "Tom 2", "Snare Drum"],
     "velocity": 104,
@@ -234,6 +257,7 @@
     "auto_cadence": true,
     "cadence_beats": 1,
     "drum_fills": true,
+    "expression": true,
     "lead_rest_prob": 0.08,
     "lead_sustain": 0.95,
     "lead_velocity_jitter": 12,

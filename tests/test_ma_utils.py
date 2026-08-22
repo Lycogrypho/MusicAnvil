@@ -1204,6 +1204,78 @@ class TestDiatonicTriad(unittest.TestCase):
             ma_utils.diatonic_triad("no_such_scale", 0)
 
 
+class TestExpressionData(unittest.TestCase):
+    """ToDo 5.1-5.5 — the configuration behind the expression layer."""
+
+    def test_controller_numbers_are_the_standard_ones(self):
+        self.assertEqual(ma_utils.CC_MODULATION, 1)
+        self.assertEqual(ma_utils.CC_PORTAMENTO_TIME, 5)
+        self.assertEqual(ma_utils.CC_VOLUME, 7)
+        self.assertEqual(ma_utils.CC_PAN, 10)
+        self.assertEqual(ma_utils.CC_EXPRESSION, 11)
+        self.assertEqual(ma_utils.CC_SUSTAIN, 64)
+        self.assertEqual(ma_utils.CC_PORTAMENTO, 65)
+        self.assertEqual(ma_utils.CC_REVERB_SEND, 91)
+        self.assertEqual(ma_utils.CC_CHORUS_SEND, 93)
+
+    def test_expression_settings_cover_every_role(self):
+        settings = ma_utils.expression_settings
+        for key in ("reverb_send", "chorus_send"):
+            with self.subTest(key=key):
+                for role in ("Lead", "Accompaniment", "Bass"):
+                    self.assertIn(role, settings[key])
+
+    def test_send_values_are_in_the_midi_range(self):
+        for key in ("reverb_send", "chorus_send"):
+            for role, value in ma_utils.expression_settings[key].items():
+                with self.subTest(key=key, role=role):
+                    self.assertGreaterEqual(value, 0)
+                    self.assertLessEqual(value, 127)
+
+    def test_swell_rises_and_decay_falls(self):
+        settings = ma_utils.expression_settings
+        swell, decay = settings["swell_range"], settings["decay_range"]
+        self.assertLess(swell[0], swell[1])
+        self.assertGreater(decay[0], decay[1])
+
+    def test_bend_depth_is_within_the_wheel_range(self):
+        self.assertLessEqual(ma_utils.expression_settings["bend_depth"], 8192)
+        self.assertGreater(ma_utils.expression_settings["bend_depth"], 0)
+
+
+class TestPowerChordPrograms(unittest.TestCase):
+    """ToDo 5.3 — distortion plus a major third is mud, so those programs play fifths."""
+
+    def test_the_distorted_guitars_are_listed(self):
+        for program in (29, 30, 31):     # overdriven, distortion, harmonics
+            with self.subTest(program=program):
+                self.assertTrue(ma_utils.is_power_chord_program(program))
+
+    def test_clean_programs_are_not(self):
+        for program in (0, 25, 27, 32, 33):
+            with self.subTest(program=program):
+                self.assertFalse(ma_utils.is_power_chord_program(program))
+
+    def test_unknown_program_is_not(self):
+        self.assertFalse(ma_utils.is_power_chord_program(None))
+
+    def test_the_power_chord_vocabulary_is_root_and_fifth(self):
+        self.assertEqual(ma_utils.POWER_CHORD, {"fifth": [0, 7]})
+
+    def test_find_compatible_chords_accepts_the_restricted_vocabulary(self):
+        chords = ma_utils.find_compatible_chords([60, 67], ma_utils.POWER_CHORD)
+        self.assertTrue(chords)
+        self.assertTrue(all(chord_type == "fifth" for _, chord_type in chords))
+
+
+class TestKeyswitchTable(unittest.TestCase):
+    """ToDo 5.5 — the keyswitch map is empty unless a library is being targeted."""
+
+    def test_the_table_exists_and_defaults_to_empty(self):
+        self.assertIsInstance(ma_utils.keyswitches, dict)
+        self.assertEqual(ma_utils.keyswitches, {})
+
+
 class TestTransformerRegistry(unittest.TestCase):
     """ToDo 4.5 — transformers declare their kind and their parameters."""
 

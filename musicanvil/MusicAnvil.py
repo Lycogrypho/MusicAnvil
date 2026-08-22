@@ -106,6 +106,7 @@ class SectionSpec:
     auto_cadence: bool | None = None
     cadence_beats: int | None = None
     drum_fills: bool | None = None
+    expression: bool | None = None
     drums_enabled: list[str] | None = None
     # Articulation overrides (None = inherit piece default)
     lead_rest_prob: float | None = None
@@ -153,6 +154,7 @@ class PieceSpec:
     auto_cadence: bool = _PIECE_DEFAULTS["auto_cadence"]     # open/closed endings per phrase
     cadence_beats: int = _PIECE_DEFAULTS["cadence_beats"]    # beats reshaped at a phrase end
     drum_fills: bool = _PIECE_DEFAULTS["drum_fills"]         # fill into every phrase boundary
+    expression: bool = _PIECE_DEFAULTS["expression"]         # CC swells, sends and vibrato
     drums_enabled: list[str] | None = None
     # Articulation defaults
     lead_rest_prob: float = _PIECE_DEFAULTS["lead_rest_prob"]       # probability of rest (vs note) per sub-unit slot
@@ -187,6 +189,7 @@ class ResolvedSection:
     auto_cadence: bool
     cadence_beats: int
     drum_fills: bool
+    expression: bool
     drums_enabled: list[str] | None
     lead_rest_prob: float
     lead_sustain: float
@@ -249,6 +252,7 @@ def resolve_section(section, piece):
         auto_cadence=_inh(section.auto_cadence, piece.auto_cadence),
         cadence_beats=_inh(section.cadence_beats, piece.cadence_beats),
         drum_fills=_inh(section.drum_fills, piece.drum_fills),
+        expression=_inh(section.expression, piece.expression),
         drums_enabled=_inh(section.drums_enabled, piece.drums_enabled),
         lead_rest_prob=_inh(section.lead_rest_prob, piece.lead_rest_prob),
         lead_sustain=_inh(section.lead_sustain, piece.lead_sustain),
@@ -276,6 +280,11 @@ def piece_seconds(piece):
         resolved = resolve_section(piece.sections[entry.section], piece)
         total += section_seconds(resolved.bars, resolved.tempo, resolved.signature)
     return total
+
+
+def is_power_chord_instrument(name):
+    """True when an instrument's General MIDI program should be voiced with fifths."""
+    return ma_utils.is_power_chord_program(INSTRUMENT_PROGRAMS.get(name))
 
 
 def _scale_pitches(scale, tonic, tonic_octave=4):
@@ -444,6 +453,35 @@ class NoteEvent:
 
 
 @dataclass
+class ControlEvent:
+    """A MIDI control change in musical time (see ``ma_utils.CC_*``)."""
+    start_sub: int
+    number: int
+    value: int
+
+    def copy(self, **changes):
+        data = dict(self.__dict__)
+        data.update(changes)
+        return ControlEvent(**data)
+
+
+@dataclass
+class BendEvent:
+    """A pitch-bend point in musical time; ``pitch`` is the MIDI value (0 = centre).
+
+    Pitch bend applies to a whole channel, so a bend belongs to a monophonic role — see
+    ``apply_pitch_bends``.
+    """
+    start_sub: int
+    pitch: int
+
+    def copy(self, **changes):
+        data = dict(self.__dict__)
+        data.update(changes)
+        return BendEvent(**data)
+
+
+@dataclass
 class RenderedSection:
     """A rendered section still in musical time — what ``render_piece`` caches.
 
@@ -456,6 +494,8 @@ class RenderedSection:
     events: dict = field(default_factory=dict)
     drums: list = field(default_factory=list)
     roles: dict = field(default_factory=dict)   # instrument name -> ROLE_* it plays
+    controls: dict = field(default_factory=dict)  # instrument -> [ControlEvent]
+    bends: dict = field(default_factory=dict)     # instrument -> [BendEvent]
 
     @property
     def length(self):
@@ -473,6 +513,10 @@ class RenderedSection:
             drums=[pretty_midi.Note(velocity=n.velocity, pitch=n.pitch,
                                     start=n.start, end=n.end) for n in self.drums],
             roles=dict(self.roles),
+            controls={instrument: [control.copy() for control in controls]
+                      for instrument, controls in self.controls.items()},
+            bends={instrument: [bend.copy() for bend in bends]
+                   for instrument, bends in self.bends.items()},
         )
 
     def tracks(self):
@@ -481,6 +525,50 @@ class RenderedSection:
         for instrument, events in self.events.items():
             tracks.setdefault(instrument, []).extend(materialise(events, self.context))
         return tracks
+
+    def control_changes(self):
+        """Materialise to ``{instrument: [pretty_midi.ControlChange]}``.
+
+        Two values for the same controller at the same instant are ambiguous, so the
+        last one written wins.
+        """
+        materialised = {}
+        for instrument, controls in self.controls.items():
+            latest = {}
+            for control in controls:
+                latest[(control.start_sub, control.number)] = control.value
+            materialised[instrument] = [
+                pretty_midi.ControlChange(number=number, value=value,
+                                          time=self.context.seconds(start_sub))
+                for (start_sub, number), value in sorted(latest.items())]
+        return materialised
+
+    def pitch_bends(self):
+        """Materialise to ``{instrument: [pretty_midi.PitchBend]}``.
+
+        As with controllers, one value per instant: a gesture short enough to round two
+        of its steps onto the same grid position collapses to its later value.
+        """
+        materialised = {}
+        for instrument, bends in self.bends.items():
+            latest = {}
+            for bend in bends:
+                latest[bend.start_sub] = bend.pitch
+            materialised[instrument] = [
+                pretty_midi.PitchBend(pitch=pitch, time=self.context.seconds(start_sub))
+                for start_sub, pitch in sorted(latest.items())]
+        return materialised
+
+    def add_control(self, instrument, start_sub, number, value):
+        """Record one control change, clamped to the MIDI range."""
+        self.controls.setdefault(instrument, []).append(ControlEvent(
+            start_sub=max(0, int(start_sub)), number=int(number),
+            value=max(0, min(127, int(value)))))
+
+    def add_bend(self, instrument, start_sub, pitch):
+        """Record one pitch-bend point, clamped to the MIDI range."""
+        self.bends.setdefault(instrument, []).append(BendEvent(
+            start_sub=max(0, int(start_sub)), pitch=max(-8192, min(8191, int(pitch)))))
 
 
 def make_render_context(resolved):
@@ -690,7 +778,7 @@ def generate_bass_line(scale_pitches, n_beats, beat_len, rng, gate=0.90):
 
 
 def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order,
-                          octave_shift=-2):
+                          octave_shift=-2, chord_defs=None):
     """Return the MIDI pitches of the best chord for a beat, or None.
 
     ``beat_pitches`` are the lead pitches sounding in the beat; ``primary`` is the
@@ -705,10 +793,11 @@ def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions
     chord is voiced ``octave_shift`` octaves relative to ``primary`` (negative = below).
     """
     primary_pc = primary % 12
+    defs = ma_utils.chord_definitions if chord_defs is None else chord_defs
     best = None
     best_key = None
-    for root, chord_type in ma_utils.find_compatible_chords(beat_pitches):
-        intervals = ma_utils.chord_definitions[chord_type]
+    for root, chord_type in ma_utils.find_compatible_chords(beat_pitches, defs):
+        intervals = defs[chord_type]
         chord_pcs = {(root + interval) % 12 for interval in intervals}
         is_diatonic = chord_pcs <= scale_pcs
         is_extended = ((root - tonic_pc) % 12, chord_type) in extensions
@@ -734,7 +823,8 @@ def _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions
 
 
 def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len,
-                        scale_name=None, chord_octave_shift=-2, gate=0.85):
+                        scale_name=None, chord_octave_shift=-2, gate=0.85,
+                        chord_defs=None):
     """One chord per beat, chosen to fit the lead notes sounding in that beat.
 
     For each beat, the lead notes overlapping it are collected and
@@ -748,12 +838,15 @@ def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len,
     chord, definition order (see ``_voice_chord_for_beat``). If the full set of beat
     notes has no match, the beat's downbeat note alone is harmonised; beats with no
     lead note are rests. ``gate`` shortens each chord so successive chords breathe.
+    ``chord_defs`` restricts the vocabulary — the engine passes ``ma_utils.POWER_CHORD``
+    for distorted programs, where a major third turns to mud.
     """
+    defs = ma_utils.chord_definitions if chord_defs is None else chord_defs
     scale_pcs = {pitch % 12 for pitch in scale_pitches}
     tonic_pc = scale_pitches[0] % 12 if scale_pitches else 0
     raw_ext = ma_utils.chord_palette_extensions.get(scale_name or "", [])
     extensions = frozenset((offset, ctype) for offset, ctype in raw_ext)
-    order = {name: index for index, name in enumerate(ma_utils.chord_definitions)}
+    order = {name: index for index, name in enumerate(defs)}
     notes = []
     for beat in range(n_beats):
         t = beat * beat_len
@@ -768,10 +861,10 @@ def generate_chord_line(lead_notes, scale_pitches, n_beats, beat_len,
             continue
 
         chord = _voice_chord_for_beat(beat_pitches, primary, scale_pcs, tonic_pc, extensions, order,
-                                      chord_octave_shift)
+                                      chord_octave_shift, defs)
         if chord is None:  # fall back to harmonising just the downbeat note
             chord = _voice_chord_for_beat([primary], primary, scale_pcs, tonic_pc, extensions, order,
-                                          chord_octave_shift)
+                                          chord_octave_shift, defs)
         if chord is None:
             continue
 
@@ -1043,10 +1136,13 @@ def _render_section_events(resolved, rng=None):
     accomp_role = resolved.roles[ROLE_ACCOMPANIMENT]
     chord_events = []
     if accomp_role.main:
+        # A distorted program is voiced with fifths: distortion plus a major third is mud.
+        chord_defs = (ma_utils.POWER_CHORD
+                      if is_power_chord_instrument(accomp_role.main) else None)
         chord_notes = generate_chord_line(materialise(lead_events, ctx), ctx.scale_pitches,
                                           ctx.n_beats, ctx.beat_len, scale_name=ctx.scale,
                                           chord_octave_shift=resolved.chord_octave_shift,
-                                          gate=resolved.chord_gate)
+                                          gate=resolved.chord_gate, chord_defs=chord_defs)
         chord_events = sustain_chords(
             events_from_notes(chord_notes, ctx, gate=resolved.chord_gate),
             lead_events, ctx)
@@ -1069,6 +1165,13 @@ def _render_section_events(resolved, rng=None):
                                         resolved.intensity)
     if resolved.drum_fills:
         rendered.drums = add_drum_fills(rendered.drums, ctx, phrases)
+    if resolved.expression:
+        apply_expression(rendered)
+        apply_pitch_bends(rendered)
+        apply_palm_mutes(rendered)
+        apply_portamento(rendered)
+        add_fret_noise(rendered)
+    apply_keyswitches(rendered)      # no-op unless the config names a sampled library
     return rendered
 
 
@@ -1225,10 +1328,13 @@ def shape_cadence(section, start_sub, end_sub, rising, swell=0.12, taper=0.25):
                 event.pitch = _nearest_pitch(root_pc, event.pitch)
                 event.degree = _degree_of(event.pitch, ctx.scale_pitches)
         elif is_chordal and chord_pcs:
-            # Cadence harmony: the tonic triad closes, the triad of the fifth hangs.
-            root = _nearest_pitch(chord_pcs[0], min(event.pitch for event in closing))
-            for voice, pitch_class in zip(closing, chord_pcs):
-                voice.pitch = max(0, min(127, root + ((pitch_class - chord_pcs[0]) % 12)))
+            # Cadence harmony: the tonic triad closes, the triad of the fifth hangs — but
+            # a distorted part takes root and fifth only.
+            voicing = ([chord_pcs[0], chord_pcs[-1]]
+                       if is_power_chord_instrument(instrument) else chord_pcs)
+            root = _nearest_pitch(voicing[0], min(event.pitch for event in closing))
+            for voice, pitch_class in zip(closing, voicing):
+                voice.pitch = max(0, min(127, root + ((pitch_class - voicing[0]) % 12)))
                 voice.degree = _degree_of(voice.pitch, ctx.scale_pitches)
         else:
             # Melodic cadence: choose the closing note first — above the passage for an
@@ -1392,6 +1498,271 @@ ma_utils.register_transformer(CADENCE_RELEASE, release_tension,
                               kind=ma_utils.TRANSFORMER_PHRASE, params=_CADENCE_PARAMS)
 
 
+## Expression layer -------------------------------------------------------------------
+#
+# A MIDI file carries instructions, not audio: the timbre — distortion included — belongs
+# to whatever plays it. What the file *can* carry is performance, and these passes write
+# the controllers a General MIDI player is required to honour (sends, swells, vibrato) and
+# the pitch bends that make a line sound played rather than typed.
+
+def apply_expression(section, settings=None):
+    """Write the ambience sends and the phrase-level dynamic shape of a section.
+
+    One CC 91 (reverb) and CC 93 (chorus) send per instrument, taken from the per-role
+    table in the configuration, plus a CC 11 ramp across each phrase: a swell into an open
+    ending and a decay into a closed one — the same curve ``shape_cadence`` applies to
+    velocity, carried by a controller so it also shapes notes that are still ringing.
+    """
+    settings = ma_utils.expression_settings if settings is None else settings
+    if not settings or not section.events:
+        return section
+    ctx = section.context
+    reverb = settings.get("reverb_send", {})
+    chorus = settings.get("chorus_send", {})
+    steps = max(2, int(settings.get("swell_steps", 4)))
+    swell = settings.get("swell_range", [86, 120])
+    decay = settings.get("decay_range", [118, 84])
+
+    for instrument in section.events:
+        role = section.roles.get(instrument)
+        if role in reverb:
+            section.add_control(instrument, 0, ma_utils.CC_REVERB_SEND, reverb[role])
+        if role in chorus and chorus[role]:
+            section.add_control(instrument, 0, ma_utils.CC_CHORUS_SEND, chorus[role])
+
+        for phrase in section.phrases or []:
+            start_sub = phrase.start_beat * ctx.subs_per_beat
+            end_sub = min(ctx.total_sub, phrase.end_beat * ctx.subs_per_beat)
+            span = end_sub - start_sub
+            if span <= 0:
+                continue
+            first, last = (swell if phrase.ending == PHRASE_OPEN else decay)[:2]
+            for step in range(steps):
+                share = step / (steps - 1)
+                section.add_control(instrument,
+                                    start_sub + int(share * (span - 1)),
+                                    ma_utils.CC_EXPRESSION,
+                                    round(first + (last - first) * share))
+    return section
+
+
+def _is_monophonic(events):
+    """True when no two events of a track sound at the same time."""
+    ordered = sorted(events, key=lambda event: event.start_sub)
+    return all(current.end_sub <= following.start_sub
+               for current, following in zip(ordered, ordered[1:]))
+
+
+def apply_pitch_bends(section, settings=None):
+    """Bend into open cadences, slide between stepwise neighbours, and add vibrato.
+
+    Three gestures, each of which returns the wheel to centre when it is done — a bend
+    left hanging would detune every later note on the channel:
+
+    - the closing note of an *open* phrase is approached from below, the standard way a
+      guitarist leaves a line hanging;
+    - a note a step away from its predecessor and landing on a strong beat is slid into;
+    - a note held longer than ``vibrato_beats`` gets vibrato, written as CC 1 rather than
+      a stepped bend ramp: the player's own modulation is smoother, and it is one event
+      instead of a dozen.
+
+    Pitch bend applies to a whole MIDI channel, so this runs only on monophonic roles
+    (lead and bass); a chordal track is skipped because one voice cannot bend alone.
+    """
+    settings = ma_utils.expression_settings if settings is None else settings
+    if not settings or not section.events:
+        return section
+    ctx = section.context
+    depth = int(settings.get("bend_depth", 4096))
+    steps = max(2, int(settings.get("bend_steps", 3)))
+    share = float(settings.get("bend_share", 0.35))
+    slide_limit = int(settings.get("slide_semitones", 2))
+    vibrato_subs = int(round(float(settings.get("vibrato_beats", 2.0)) * ctx.subs_per_beat))
+    vibrato_depth = int(settings.get("vibrato_depth", 42))
+    phrases = {phrase.index: phrase for phrase in section.phrases or []}
+
+    def ramp(instrument, start_sub, end_sub, from_pitch):
+        """Bend from ``from_pitch`` back to centre between the two positions."""
+        span = max(1, end_sub - start_sub)
+        for step in range(steps):
+            progress = step / (steps - 1)
+            section.add_bend(instrument, start_sub + round(progress * span),
+                             round(from_pitch * (1.0 - progress)))
+
+    for instrument, events in section.events.items():
+        if section.roles.get(instrument) not in (ROLE_LEAD, ROLE_BASS):
+            continue
+        if not _is_monophonic(events):
+            continue
+        ordered = sorted(events, key=lambda event: event.start_sub)
+        for index, event in enumerate(ordered):
+            gesture = max(1, int(round(event.length_sub * share)))
+            phrase = phrases.get(event.phrase)
+
+            if event.is_phrase_final and phrase is not None and phrase.ending == PHRASE_OPEN:
+                ramp(instrument, event.start_sub, event.start_sub + gesture, -depth)
+            elif index:
+                interval = event.pitch - ordered[index - 1].pitch
+                on_beat = event.start_sub % ctx.subs_per_beat == 0
+                strong = ma_utils.metric_weight(ctx.beat_in_bar(event.start_sub),
+                                                ctx.beats_per_bar)
+                if (interval and abs(interval) <= slide_limit and on_beat
+                        and strong >= ma_utils.metric_accents.get("secondary", 0.85)):
+                    ramp(instrument, event.start_sub, event.start_sub + gesture,
+                         -interval * (depth // max(1, slide_limit)))
+
+            if vibrato_subs and event.length_sub >= vibrato_subs:
+                section.add_control(instrument, event.start_sub + event.length_sub // 2,
+                                    ma_utils.CC_MODULATION, vibrato_depth)
+                section.add_control(instrument, min(ctx.total_sub, event.end_sub),
+                                    ma_utils.CC_MODULATION, 0)
+    return section
+
+
+FRET_NOISE = "Guitar Fret Noise"       # GM program 120, played as its own track
+FRET_NOISE_PITCH = 52                  # any pitch triggers the noise; a low one is quietest
+
+
+def apply_palm_mutes(section, settings=None):
+    """Choke the weak strikes of a distorted part — the chug under a riff.
+
+    A distorted rhythm guitar does not let every chord ring: the strikes off the strong
+    beats are damped with the picking hand. Only power-chord programs are affected, since
+    that is where the technique belongs.
+    """
+    settings = ma_utils.expression_settings if settings is None else settings
+    gate = float(settings.get("palm_mute_gate", 0)) if settings else 0
+    if gate <= 0:
+        return section
+    ctx = section.context
+    strong = ma_utils.metric_accents.get("secondary", 0.85)
+    for instrument, events in section.events.items():
+        if not is_power_chord_instrument(instrument):
+            continue
+        for event in events:
+            if event.is_phrase_final:
+                continue
+            weight = ma_utils.metric_weight(ctx.beat_in_bar(event.start_sub),
+                                            ctx.beats_per_bar)
+            if weight < strong:
+                event.gate = min(event.gate, gate)
+    return section
+
+
+def add_fret_noise(section, settings=None):
+    """Layer a soft ``Guitar Fret Noise`` hit before each phrase — the hand moving.
+
+    Off by default: it is a detail that suits a guitar-led arrangement and clutters
+    anything else, so it is enabled in the configuration rather than assumed.
+    """
+    settings = ma_utils.expression_settings if settings is None else settings
+    if not settings or not settings.get("fret_noise"):
+        return section
+    guitars = [name for name in section.events if is_power_chord_instrument(name)
+               or "Guitar" in name]
+    if not guitars or not section.phrases:
+        return section
+    ctx = section.context
+    velocity = max(1, min(127, int(settings.get("fret_noise_velocity", 38))))
+    lead_in = max(1, ctx.subs_per_beat // 4)
+    noises = []
+    for phrase in section.phrases:
+        start_sub = phrase.start_beat * ctx.subs_per_beat - lead_in
+        if start_sub < 0:
+            continue
+        noises.append(NoteEvent(start_sub=start_sub, length_sub=lead_in,
+                                pitch=FRET_NOISE_PITCH,
+                                velocity=velocity, gate=1.0))
+    if noises:
+        section.events.setdefault(FRET_NOISE, []).extend(noises)
+        section.roles.setdefault(FRET_NOISE, None)
+    return section
+
+
+def apply_portamento(section, settings=None):
+    """Switch portamento on for stepwise legato runs, and off again afterwards.
+
+    Off by default: the pitch-bend slides of ``apply_pitch_bends`` already cover stepwise
+    motion, and running both at once makes a synth slur twice.
+    """
+    settings = ma_utils.expression_settings if settings is None else settings
+    if not settings or not settings.get("portamento"):
+        return section
+    ctx = section.context
+    time_value = max(0, min(127, int(settings.get("portamento_time", 24))))
+    for instrument, events in section.events.items():
+        if section.roles.get(instrument) not in (ROLE_LEAD, ROLE_BASS):
+            continue
+        ordered = sorted(events, key=lambda event: event.start_sub)
+        for previous, current in zip(ordered, ordered[1:]):
+            legato = previous.end_sub >= current.start_sub
+            stepwise = 0 < abs(current.pitch - previous.pitch) <= 2
+            if legato and stepwise:
+                section.add_control(instrument, previous.start_sub,
+                                    ma_utils.CC_PORTAMENTO_TIME, time_value)
+                section.add_control(instrument, previous.start_sub,
+                                    ma_utils.CC_PORTAMENTO, 127)
+                section.add_control(instrument, min(ctx.total_sub, current.end_sub),
+                                    ma_utils.CC_PORTAMENTO, 0)
+    return section
+
+
+ARTICULATION_MUTED = "muted"
+ARTICULATION_SUSTAIN = "sustain"
+ARTICULATION_NORMAL = "normal"
+KEYSWITCH_VELOCITY = 1
+
+
+def articulation_of(event, ctx, settings=None):
+    """Classify how a note is played: muted, sustained or ordinary.
+
+    Derived from what the shaping passes already decided — a choked gate means the note
+    was palm-muted, a long held note is a sustain — so the classification cannot drift
+    from the notes themselves.
+    """
+    settings = ma_utils.expression_settings if settings is None else settings
+    mute_gate = float(settings.get("palm_mute_gate", 0.34)) if settings else 0.34
+    sustain_subs = int(round(float(settings.get("vibrato_beats", 2.0)) * ctx.subs_per_beat))
+    if event.gate <= mute_gate + 1e-9:
+        return ARTICULATION_MUTED
+    if sustain_subs and event.length_sub >= sustain_subs:
+        return ARTICULATION_SUSTAIN
+    return ARTICULATION_NORMAL
+
+
+def apply_keyswitches(section, table=None, settings=None):
+    """Emit the keyswitch notes a sampled library uses to select an articulation.
+
+    A keyswitch is an ordinary MIDI note below the playing range, so it travels in the
+    instrument's own track. It stays in force until the next one, so one is written only
+    where the articulation *changes* — not on every note.
+
+    The table is empty unless the configuration names a library, in which case it maps
+    instrument -> {articulation: pitch} for the articulations of ``articulation_of``.
+    """
+    table = ma_utils.keyswitches if table is None else table
+    if not table or not section.events:
+        return section
+    ctx = section.context
+    for instrument, events in list(section.events.items()):
+        mapping = table.get(instrument)
+        if not mapping or not events:
+            continue
+        switches = []
+        current = None
+        for event in sorted(events, key=lambda item: item.start_sub):
+            articulation = articulation_of(event, ctx, settings)
+            pitch = mapping.get(articulation)
+            if pitch is None or articulation == current:
+                continue
+            switches.append(NoteEvent(start_sub=max(0, event.start_sub - 1), length_sub=1,
+                                      pitch=int(pitch), velocity=KEYSWITCH_VELOCITY,
+                                      gate=1.0))
+            current = articulation
+        section.events[instrument].extend(switches)
+    return section
+
+
 def _insert_midi_tempo_change(midi_data, time_seconds, tempo_bpm):
     """Insert a MIDI tempo-change event at ``time_seconds`` with ``tempo_bpm`` BPM.
 
@@ -1473,6 +1844,8 @@ def render_piece(piece, rng=None):
     midi_data = pretty_midi.PrettyMIDI(initial_tempo=piece.tempo)
     rendered = {}
     combined = {}
+    combined_controls = {}
+    combined_bends = {}
     offset = 0.0
     prev_tempo = piece.tempo
     prev_signature = None  # None until the first section sets the opening signature
@@ -1511,6 +1884,14 @@ def render_piece(piece, rng=None):
             for note in notes:
                 destination.append(pretty_midi.Note(velocity=note.velocity, pitch=note.pitch,
                                                     start=note.start + offset, end=note.end + offset))
+        for instrument, controls in section.control_changes().items():
+            combined_controls.setdefault(instrument, []).extend(
+                pretty_midi.ControlChange(number=control.number, value=control.value,
+                                          time=control.time + offset) for control in controls)
+        for instrument, bends in section.pitch_bends().items():
+            combined_bends.setdefault(instrument, []).extend(
+                pretty_midi.PitchBend(pitch=bend.pitch, time=bend.time + offset)
+                for bend in bends)
         offset += length
 
     for instrument_name, notes in combined.items():
@@ -1525,6 +1906,8 @@ def render_piece(piece, rng=None):
             instrument = pretty_midi.Instrument(program=INSTRUMENT_PROGRAMS[instrument_name],
                                                 name=instrument_name)
         instrument.notes.extend(notes)
+        instrument.control_changes.extend(combined_controls.get(instrument_name, []))
+        instrument.pitch_bends.extend(combined_bends.get(instrument_name, []))
         midi_data.instruments.append(instrument)
     return midi_data
 
@@ -1541,7 +1924,11 @@ __all__ = [
     "apply_final_lengthening", "RhythmCell", "make_cell", "merge_repeated_chords",
     "sustain_chords", "CADENCE_TENSION", "CADENCE_RELEASE", "shape_phrase_ending",
     "build_tension", "release_tension", "shape_cadence", "apply_phrase_cadences",
-    "accelerate_harmony", "add_drum_fills",
+    "accelerate_harmony", "add_drum_fills", "ControlEvent", "BendEvent",
+    "apply_expression", "apply_pitch_bends", "is_power_chord_instrument",
+    "apply_palm_mutes", "add_fret_noise", "apply_portamento", "FRET_NOISE",
+    "apply_keyswitches", "articulation_of", "ARTICULATION_MUTED", "ARTICULATION_SUSTAIN",
+    "ARTICULATION_NORMAL",
     "parse_signature", "beat_seconds", "section_seconds", "resolve_section", "piece_seconds",
     "generate_lead_line", "generate_bass_line", "generate_chord_line", "derive_support_line",
     "render_section", "render_piece",

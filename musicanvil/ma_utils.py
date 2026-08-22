@@ -185,6 +185,38 @@ rhythm_cell = _CONFIG.get("rhythm_cell", {
     "cell_bars": 1,
 })
 
+# Instrument name -> {articulation: keyswitch pitch}. Sampled guitar and bass libraries
+# select articulations with notes below the playing range rather than with controllers;
+# this is empty unless a specific library is being targeted (see MusicAnvil.apply_keyswitches).
+keyswitches = _CONFIG.get("keyswitches", {})
+
+# General MIDI programs that are distorted enough that a major third turns to mud: those
+# parts are played as root-and-fifth power chords instead of triads.
+power_chord_programs = _CONFIG.get("power_chord_programs", [])
+POWER_CHORD = {"fifth": [0, 7]}
+
+
+def is_power_chord_program(program) -> bool:
+    """True when a program should be voiced with fifths rather than triads."""
+    return program in set(power_chord_programs)
+
+
+# MIDI controller numbers a General MIDI player is required to understand. There is no
+# standard controller for distortion/overdrive amount: that lives in the instrument
+# preset, so the useful targets here are dynamics and ambience, not gain.
+CC_MODULATION = 1     # vibrato depth
+CC_PORTAMENTO_TIME = 5
+CC_VOLUME = 7
+CC_PAN = 10
+CC_EXPRESSION = 11    # swells and decays within a phrase
+CC_SUSTAIN = 64
+CC_PORTAMENTO = 65    # on/off (>= 64 is on)
+CC_REVERB_SEND = 91
+CC_CHORUS_SEND = 93
+
+# Per-role sends, the swell/decay shape of a phrase and the vibrato thresholds.
+expression_settings = _CONFIG.get("expression", {})
+
 # The fill a drummer plays into the next phrase: which drums, how loud, how many hits per
 # beat, and the crash that marks the landing. See MusicAnvil.add_drum_fills.
 drum_fill = _CONFIG.get("drum_fill", {})

@@ -71,7 +71,7 @@ ResolvedSection
   → make_cell()      → RhythmCell                   (the section's motif)
   → generate_*()     → [NoteEvent] on the grid
   → shaping: harmonic acceleration → metric accents → phrase-final lengthening
-             → phrase cadences → drum fills
+             → phrase cadences → drum fills → expression → keyswitches
   → materialise()    → {instrument: [pretty_midi.Note]}
 ```
 
@@ -88,6 +88,7 @@ All preset data and defaults live in a single external file, `musicanvil/MusicAn
 
 - **Musical data** — `notes_in_octave`, `scale_definitions`, `chord_definitions`, `drum_pitches`, `drum_lines`, `drum_pattern_beats`, `drum_fill`, `beat_modes`
 - **Phrasing and dynamics** — `rhythm_cell` (the note-length vocabulary a motif is drawn from) and `metric_accents` (how much emphasis each position in the bar carries)
+- **Expression** — `expression` (ambience sends per role, swell/decay ranges, vibrato and bend settings, palm-mute gate, the optional fret-noise and portamento switches), `power_chord_programs` (the distorted programs voiced with fifths) and `keyswitches` (per-instrument articulation map for sampled libraries, empty by default)
 - **Instrument mapping** — `instrument_programs` (name → General MIDI program) and `velocities` (lead / bass / chord / support)
 - **`piece_defaults`** — the default values for every `PieceSpec` / `SectionSpec` field (tempo, signature, scale, tonic, the articulation, phrasing and dynamics parameters, section bars, …)
 - **`gui`** — dropdown option lists, default section names, default role assignments, and the default output filename
@@ -327,6 +328,7 @@ half the section, capped at four bars). Phrases alternate *antecedent* (open) an
 | `auto_cadence` | true | Give each phrase an open or closed ending |
 | `cadence_beats` | 1 | How many beats at a phrase end are reshaped |
 | `drum_fills` | true | Fill into each phrase boundary, crash on the landing |
+| `expression` | true | Control changes, pitch bends and playing technique (below) |
 
 What each pass does:
 
@@ -352,6 +354,40 @@ What each pass does:
 The accompaniment also holds a chord for as long as the melody stays inside it, instead of
 re-striking it on every beat, and the bass lands on the strong beats while holding some
 notes across two.
+
+### Expression: controllers, bends and technique
+
+With `expression` on (the default) the engine writes performance data, not just notes:
+
+- **Ambience sends** — one CC 91 (reverb) and CC 93 (chorus) per instrument, from the
+  per-role table in the `expression` config block.
+- **Phrase dynamics** — a CC 11 ramp across each phrase: a swell into an open ending, a
+  decay into a closed one. Unlike velocity, this also shapes notes that are still ringing.
+- **Pitch bends** — the closing note of an open phrase is approached from below, and a
+  note a step from its predecessor landing on a strong beat is slid into. Every gesture
+  returns the wheel to centre; a bend left hanging would detune the rest of the channel.
+  Because pitch bend is per channel, only the monophonic roles (lead, bass) are bent.
+- **Vibrato** — notes held longer than `vibrato_beats` get CC 1, which is smoother than a
+  stepped bend ramp and costs one event instead of a dozen.
+- **Power chords** — an accompaniment whose program is in `power_chord_programs`
+  (`Overdriven Guitar`, `Distortion Guitar`, `Guitar Harmonics`) is voiced root-and-fifth
+  and its cadence chords drop the third: distortion plus a major third is mud.
+- **Palm mutes** — on those same distorted parts, strikes off the strong beats are choked
+  to a short gate, which is the chug under a riff.
+- **Off by default:** `fret_noise` (a soft `Guitar Fret Noise` layer before each phrase)
+  and `portamento` (CC 5/65 around stepwise legato pairs, which would otherwise slur twice
+  over the pitch-bend slides).
+
+```python
+piece.expression = False        # notes only, no controllers or bends
+```
+
+**Keyswitches.** For a sampled library (Ample, Shreddage, MODO Bass, Trilian) rather than a
+GM synth, articulations are chosen with notes below the playing range. Fill in
+`keyswitches` in the config — `{"Electric Bass": {"muted": 24, "sustain": 26, "normal": 25}}`
+— and the engine emits one whenever the articulation changes (muted, sustained or ordinary,
+read from the gate and length the shaping passes produced). It is empty by default, so
+nothing is written unless a library is actually being targeted.
 
 ### Articulation parameters
 
@@ -609,9 +645,9 @@ timbres — `Overdriven Guitar` (29), `Distortion Guitar` (30), `Guitar Harmonic
 Beyond the choice of program, a GM-compliant player also responds to control changes:
 CC 91 reverb send, CC 93 chorus send, CC 1 modulation, CC 11 expression, CC 7 volume,
 CC 10 pan, CC 64 sustain (GM2/GS/XG add CC 92 tremolo and CC 95 phaser). There is **no**
-standard controller for "distortion amount" — that lives in the preset. MusicAnvil does
-not emit control changes or pitch bends yet (see ToDo P5); when it does, `pretty_midi`
-carries them through `Instrument.control_changes` and `Instrument.pitch_bends`.
+standard controller for "distortion amount" — that lives in the preset. MusicAnvil emits the useful ones itself — see
+[Expression](#expression-controllers-bends-and-technique) — carried by `pretty_midi`
+through `Instrument.control_changes` and `Instrument.pitch_bends`.
 
 For a real amp/cabinet character, palm mutes or slides with finger noise, play the
 generated `.mid` through a sampled library or amp simulator (SF2/SFZ soundfont, or a VST),
@@ -646,7 +682,7 @@ Notes use sharps only (`C#`, not `Db`). Percussion always uses MIDI channel 10.
 
 ## Tests
 
-Run the test suite (503 tests):
+Run the test suite (573 tests):
 
 ```
 .venv\Scripts\python -m pytest tests/ -v

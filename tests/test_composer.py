@@ -1819,6 +1819,445 @@ class TestInstrumentPrograms(unittest.TestCase):
         self.assertTrue(track[0].notes)
 
 
+class TestExpressionControllers(unittest.TestCase):
+    """ToDo 5.1 — ambience sends and phrase-level dynamics, as control changes."""
+
+    def _render(self, bars=4, expression=True, seed=5, phrase_bars=2):
+        piece = _make_piece(bars=bars)
+        piece.expression = expression
+        piece.sections["A"].phrase_bars = phrase_bars
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def _values(self, section, instrument, number):
+        return [(c.start_sub, c.value) for c in sorted(section.controls[instrument],
+                                                       key=lambda c: c.start_sub)
+                if c.number == number]
+
+    def test_each_role_gets_its_reverb_send(self):
+        section = self._render()
+        sends = ma_utils.expression_settings["reverb_send"]
+        for instrument, role in section.roles.items():
+            with self.subTest(instrument=instrument):
+                self.assertEqual(self._values(section, instrument,
+                                              ma_utils.CC_REVERB_SEND)[0],
+                                 (0, sends[role]))
+
+    def test_chorus_send_is_skipped_when_zero(self):
+        settings = dict(ma_utils.expression_settings)
+        settings["chorus_send"] = {"Lead": 0, "Accompaniment": 0, "Bass": 0}
+        section = self._render(expression=False)
+        MusicAnvil.apply_expression(section, settings)
+        for instrument in section.events:
+            self.assertEqual(self._values(section, instrument, ma_utils.CC_CHORUS_SEND), [])
+
+    def test_an_open_phrase_swells_and_a_closed_one_decays(self):
+        section = self._render()
+        opening = section.phrases[0]
+        closing = section.phrases[-1]
+        ctx = section.context
+        values = self._values(section, "Piano", ma_utils.CC_EXPRESSION)
+
+        def within(phrase):
+            return [value for sub, value in values
+                    if phrase.start_beat * ctx.subs_per_beat <= sub
+                    < phrase.end_beat * ctx.subs_per_beat]
+
+        self.assertEqual(opening.ending, MusicAnvil.PHRASE_OPEN)
+        self.assertLess(within(opening)[0], within(opening)[-1])
+        self.assertEqual(closing.ending, MusicAnvil.PHRASE_CLOSED)
+        self.assertGreater(within(closing)[0], within(closing)[-1])
+
+    def test_the_ramp_has_the_configured_number_of_steps(self):
+        section = self._render()
+        steps = ma_utils.expression_settings["swell_steps"]
+        values = self._values(section, "Piano", ma_utils.CC_EXPRESSION)
+        self.assertEqual(len(values), steps * len(section.phrases))
+
+    def test_controller_values_stay_in_range(self):
+        section = self._render()
+        for controls in section.controls.values():
+            for control in controls:
+                self.assertGreaterEqual(control.value, 0)
+                self.assertLessEqual(control.value, 127)
+                self.assertGreaterEqual(control.start_sub, 0)
+
+    def test_disabling_expression_writes_nothing(self):
+        section = self._render(expression=False)
+        self.assertEqual(section.controls, {})
+        self.assertEqual(section.bends, {})
+
+    def test_controls_reach_the_rendered_midi_with_the_section_offset(self):
+        piece = _make_piece(structure=["A", "A"], bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(5))
+        piano = [inst for inst in midi.instruments if inst.name == "Piano"][0]
+        section_len = MusicAnvil.section_seconds(2, 120, (4, 4))
+        self.assertTrue(piano.control_changes)
+        self.assertTrue(any(c.time >= section_len - 1e-9 for c in piano.control_changes),
+                        "the second occurrence contributed no controllers")
+
+    def test_controls_survive_a_write_and_reload(self):
+        piece = _make_piece(bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(5))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cc.mid")
+            midi.write(path)
+            reloaded = pretty_midi.PrettyMIDI(path)
+        piano = [inst for inst in reloaded.instruments if not inst.is_drum]
+        self.assertTrue(any(inst.control_changes for inst in piano))
+
+    def test_one_value_per_controller_and_instant(self):
+        section = self._render()
+        for instrument, controls in section.control_changes().items():
+            keys = [(round(c.time, 9), c.number) for c in controls]
+            with self.subTest(instrument=instrument):
+                self.assertEqual(len(keys), len(set(keys)))
+
+    def test_drums_get_no_controllers(self):
+        section = self._render()
+        self.assertNotIn(MusicAnvil.DRUM_TRACK, section.controls)
+
+    def test_apply_expression_without_settings_is_a_no_op(self):
+        section = self._render(expression=False)
+        MusicAnvil.apply_expression(section, settings={})
+        self.assertEqual(section.controls, {})
+
+
+class TestPitchBends(unittest.TestCase):
+    """ToDo 5.2 — bends into open cadences, stepwise slides and vibrato."""
+
+    def _render(self, bars=4, expression=True, seed=3, phrase_bars=2):
+        piece = _make_piece(bars=bars)
+        piece.expression = expression
+        piece.sections["A"].phrase_bars = phrase_bars
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def test_only_monophonic_roles_are_bent(self):
+        section = self._render()
+        for instrument, bends in section.bends.items():
+            with self.subTest(instrument=instrument):
+                self.assertIn(section.roles[instrument],
+                              (MusicAnvil.ROLE_LEAD, MusicAnvil.ROLE_BASS))
+
+    def test_the_chordal_accompaniment_is_never_bent(self):
+        section = self._render()
+        self.assertNotIn("Guitar", section.bends)
+
+    def test_every_gesture_returns_the_wheel_to_centre(self):
+        """A bend left hanging would detune every later note on the channel."""
+        section = self._render()
+        for instrument, bends in section.pitch_bends().items():
+            with self.subTest(instrument=instrument):
+                self.assertEqual(bends[-1].pitch, 0)
+
+    def test_an_open_cadence_is_approached_from_below(self):
+        section = self._render()
+        ctx = section.context
+        opening = section.phrases[0]
+        final = max((e for e in section.events["Piano"] if e.phrase == opening.index),
+                    key=lambda e: e.start_sub)
+        gesture = [b for b in section.bends["Piano"]
+                   if final.start_sub <= b.start_sub <= final.end_sub]
+        self.assertTrue(gesture)
+        self.assertLess(min(b.pitch for b in gesture), 0)
+
+    def test_bend_values_stay_in_the_midi_range(self):
+        section = self._render()
+        for bends in section.bends.values():
+            for bend in bends:
+                self.assertGreaterEqual(bend.pitch, -8192)
+                self.assertLessEqual(bend.pitch, 8191)
+
+    def test_vibrato_is_written_as_modulation_and_switched_off(self):
+        section = self._render()
+        ctx = section.context
+        threshold = ma_utils.expression_settings["vibrato_beats"] * ctx.subs_per_beat
+        long_notes = [e for events in section.events.values() for e in events
+                      if e.length_sub >= threshold]
+        modulation = [c for controls in section.controls.values() for c in controls
+                      if c.number == ma_utils.CC_MODULATION]
+        if long_notes:
+            self.assertTrue(modulation)
+            self.assertIn(0, [c.value for c in modulation],
+                          "vibrato is never switched off again")
+        else:
+            self.assertFalse(modulation)
+
+    def test_bends_reach_the_rendered_midi(self):
+        piece = _make_piece(bars=4)
+        midi = MusicAnvil.render_piece(piece, random.Random(3))
+        bent = [inst for inst in midi.instruments if inst.pitch_bends]
+        self.assertTrue(bent)
+        for inst in bent:
+            self.assertEqual(inst.pitch_bends[-1].pitch, 0)
+
+    def test_bends_survive_a_write_and_reload(self):
+        piece = _make_piece(bars=4)
+        midi = MusicAnvil.render_piece(piece, random.Random(3))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "bend.mid")
+            midi.write(path)
+            reloaded = pretty_midi.PrettyMIDI(path)
+        self.assertTrue(any(inst.pitch_bends for inst in reloaded.instruments))
+
+    def test_one_bend_per_instant(self):
+        section = self._render()
+        for instrument, bends in section.pitch_bends().items():
+            times = [round(b.time, 9) for b in bends]
+            with self.subTest(instrument=instrument):
+                self.assertEqual(len(times), len(set(times)))
+
+    def test_is_monophonic_helper(self):
+        ctx = self._render(expression=False).context
+        mono = [MusicAnvil.NoteEvent(start_sub=0, length_sub=4, pitch=60, velocity=90),
+                MusicAnvil.NoteEvent(start_sub=4, length_sub=4, pitch=62, velocity=90)]
+        chord = [MusicAnvil.NoteEvent(start_sub=0, length_sub=4, pitch=60, velocity=90),
+                 MusicAnvil.NoteEvent(start_sub=0, length_sub=4, pitch=64, velocity=90)]
+        self.assertTrue(MusicAnvil._is_monophonic(mono))
+        self.assertFalse(MusicAnvil._is_monophonic(chord))
+
+    def test_apply_pitch_bends_without_settings_is_a_no_op(self):
+        section = self._render(expression=False)
+        MusicAnvil.apply_pitch_bends(section, settings={})
+        self.assertEqual(section.bends, {})
+
+    def test_a_phrase_transformer_copy_carries_the_expression(self):
+        section = self._render()
+        clone = section.copy()
+        clone.controls.setdefault("Piano", []).append(
+            MusicAnvil.ControlEvent(start_sub=0, number=7, value=100))
+        clone.bends.setdefault("Piano", []).append(
+            MusicAnvil.BendEvent(start_sub=0, pitch=1000))
+        self.assertNotEqual(len(clone.controls["Piano"]), len(section.controls["Piano"]))
+        self.assertNotEqual(len(clone.bends["Piano"]), len(section.bends["Piano"]))
+
+
+class TestPowerChordVoicing(unittest.TestCase):
+    """ToDo 5.3 — a distorted accompaniment plays root and fifth, not triads."""
+
+    def _render(self, accompaniment, seed=6, bars=4):
+        piece = _make_piece(bars=bars)
+        piece.roles[MusicAnvil.ROLE_ACCOMPANIMENT] = MusicAnvil.RoleAssignment(main=accompaniment)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def _voicings(self, section, instrument):
+        by_start = {}
+        for event in section.events[instrument]:
+            by_start.setdefault(event.start_sub, []).append(event.pitch)
+        return [tuple(sorted({(p - min(group)) % 12 for p in group}))
+                for group in by_start.values()]
+
+    def test_is_power_chord_instrument(self):
+        self.assertTrue(MusicAnvil.is_power_chord_instrument("Distortion Guitar"))
+        self.assertTrue(MusicAnvil.is_power_chord_instrument("Overdriven Guitar"))
+        self.assertFalse(MusicAnvil.is_power_chord_instrument("Guitar"))
+        self.assertFalse(MusicAnvil.is_power_chord_instrument("Unknown Instrument"))
+
+    def test_a_distorted_part_is_all_fifths(self):
+        section = self._render("Distortion Guitar")
+        voicings = self._voicings(section, "Distortion Guitar")
+        self.assertTrue(voicings)
+        self.assertEqual(set(voicings), {(0, 7)})
+
+    def test_a_clean_part_still_uses_thirds(self):
+        section = self._render("Guitar")
+        voicings = self._voicings(section, "Guitar")
+        self.assertTrue(any(3 in voicing or 4 in voicing for voicing in voicings))
+
+    def test_the_distorted_part_is_not_left_empty(self):
+        clean = self._voicings(self._render("Guitar"), "Guitar")
+        distorted = self._voicings(self._render("Distortion Guitar"), "Distortion Guitar")
+        self.assertGreaterEqual(len(distorted), len(clean) - 2)
+
+    def test_the_cadence_chord_drops_its_third(self):
+        section = self._render("Distortion Guitar")
+        events = section.events["Distortion Guitar"]
+        last = max(event.start_sub for event in events)
+        closing = {(e.pitch - min(x.pitch for x in events if x.start_sub == last)) % 12
+                   for e in events if e.start_sub == last}
+        self.assertEqual(closing, {0, 7})
+
+    def test_generate_chord_line_honours_a_restricted_vocabulary(self):
+        scale = [pretty_midi.note_name_to_number(n)
+                 for n in ma_utils.generate_scale("major", "C")]
+        lead = [pretty_midi.Note(velocity=100, pitch=72, start=0.0, end=0.5)]
+        chords = MusicAnvil.generate_chord_line(lead, scale, 1, 0.5,
+                                                chord_defs=ma_utils.POWER_CHORD)
+        self.assertTrue(chords)
+        self.assertEqual({(n.pitch - min(c.pitch for c in chords)) % 12 for n in chords},
+                         {0, 7})
+
+
+class TestPlayingTechnique(unittest.TestCase):
+    """ToDo 5.4 — palm mutes, fret noise and portamento."""
+
+    def _render(self, accompaniment="Distortion Guitar", seed=8, bars=4):
+        piece = _make_piece(bars=bars)
+        piece.roles[MusicAnvil.ROLE_ACCOMPANIMENT] = MusicAnvil.RoleAssignment(main=accompaniment)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    # -- palm mutes -------------------------------------------------------------------
+
+    def test_weak_strikes_of_a_distorted_part_are_choked(self):
+        section = self._render()
+        gate = ma_utils.expression_settings["palm_mute_gate"]
+        muted = [e for e in section.events["Distortion Guitar"] if e.gate <= gate + 1e-9]
+        self.assertTrue(muted, "nothing was palm-muted")
+
+    def test_strong_beats_are_left_ringing(self):
+        section = self._render()
+        ctx = section.context
+        gate = ma_utils.expression_settings["palm_mute_gate"]
+        strong = ma_utils.metric_accents["secondary"]
+        for event in section.events["Distortion Guitar"]:
+            weight = ma_utils.metric_weight(ctx.beat_in_bar(event.start_sub), ctx.beats_per_bar)
+            if weight >= strong:
+                self.assertGreater(event.gate, gate)
+
+    def test_a_clean_part_is_never_palm_muted(self):
+        section = self._render(accompaniment="Guitar")
+        gate = ma_utils.expression_settings["palm_mute_gate"]
+        self.assertFalse([e for e in section.events["Guitar"] if e.gate <= gate + 1e-9])
+
+    def test_palm_mutes_can_be_switched_off(self):
+        section = self._render()
+        before = [e.gate for e in section.events["Distortion Guitar"]]
+        MusicAnvil.apply_palm_mutes(section, settings={"palm_mute_gate": 0})
+        self.assertEqual([e.gate for e in section.events["Distortion Guitar"]], before)
+
+    # -- fret noise -------------------------------------------------------------------
+
+    def test_fret_noise_is_off_by_default(self):
+        section = self._render()
+        self.assertNotIn(MusicAnvil.FRET_NOISE, section.events)
+
+    def test_fret_noise_adds_a_track_when_enabled(self):
+        section = self._render()
+        settings = dict(ma_utils.expression_settings)
+        settings["fret_noise"] = True
+        MusicAnvil.add_fret_noise(section, settings)
+        self.assertIn(MusicAnvil.FRET_NOISE, section.events)
+        self.assertTrue(section.events[MusicAnvil.FRET_NOISE])
+
+    def test_fret_noise_sits_just_before_a_phrase(self):
+        section = self._render()
+        settings = dict(ma_utils.expression_settings)
+        settings["fret_noise"] = True
+        MusicAnvil.add_fret_noise(section, settings)
+        ctx = section.context
+        starts = {phrase.start_beat * ctx.subs_per_beat for phrase in section.phrases}
+        for event in section.events[MusicAnvil.FRET_NOISE]:
+            self.assertIn(event.end_sub, starts)
+
+    def test_fret_noise_is_a_known_instrument(self):
+        self.assertIn(MusicAnvil.FRET_NOISE, MusicAnvil.INSTRUMENT_PROGRAMS)
+        self.assertEqual(MusicAnvil.INSTRUMENT_PROGRAMS[MusicAnvil.FRET_NOISE], 120)
+
+    # -- portamento -------------------------------------------------------------------
+
+    def test_portamento_is_off_by_default(self):
+        section = self._render()
+        numbers = {c.number for controls in section.controls.values() for c in controls}
+        self.assertNotIn(ma_utils.CC_PORTAMENTO, numbers)
+
+    def test_portamento_switches_on_and_off_again(self):
+        section = self._render()
+        settings = dict(ma_utils.expression_settings)
+        settings["portamento"] = True
+        MusicAnvil.apply_portamento(section, settings)
+        values = [c.value for controls in section.controls.values() for c in controls
+                  if c.number == ma_utils.CC_PORTAMENTO]
+        if values:
+            self.assertIn(127, values)
+            self.assertIn(0, values)
+
+    def test_portamento_only_touches_monophonic_roles(self):
+        section = self._render()
+        settings = dict(ma_utils.expression_settings)
+        settings["portamento"] = True
+        MusicAnvil.apply_portamento(section, settings)
+        for instrument, controls in section.controls.items():
+            if any(c.number == ma_utils.CC_PORTAMENTO for c in controls):
+                self.assertIn(section.roles[instrument],
+                              (MusicAnvil.ROLE_LEAD, MusicAnvil.ROLE_BASS))
+
+
+class TestKeyswitches(unittest.TestCase):
+    """ToDo 5.5 — articulation selection for sampled libraries."""
+
+    TABLE = {"Piano": {"muted": 24, "sustain": 26, "normal": 25}}
+
+    def _render(self, seed=8, bars=4):
+        piece = _make_piece(bars=bars)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def _switches(self, section, instrument="Piano"):
+        return [e for e in section.events[instrument]
+                if e.velocity == MusicAnvil.KEYSWITCH_VELOCITY]
+
+    def test_nothing_happens_without_a_table(self):
+        section = self._render()
+        before = {i: len(e) for i, e in section.events.items()}
+        MusicAnvil.apply_keyswitches(section, table={})
+        self.assertEqual({i: len(e) for i, e in section.events.items()}, before)
+
+    def test_switches_are_written_for_a_mapped_instrument(self):
+        section = self._render()
+        MusicAnvil.apply_keyswitches(section, self.TABLE)
+        self.assertTrue(self._switches(section))
+
+    def test_unmapped_instruments_are_untouched(self):
+        section = self._render()
+        before = len(section.events["Guitar"])
+        MusicAnvil.apply_keyswitches(section, self.TABLE)
+        self.assertEqual(len(section.events["Guitar"]), before)
+
+    def test_switch_pitches_come_from_the_table(self):
+        section = self._render()
+        MusicAnvil.apply_keyswitches(section, self.TABLE)
+        allowed = set(self.TABLE["Piano"].values())
+        for switch in self._switches(section):
+            self.assertIn(switch.pitch, allowed)
+
+    def test_a_switch_precedes_the_note_it_serves(self):
+        section = self._render()
+        MusicAnvil.apply_keyswitches(section, self.TABLE)
+        played = [e for e in section.events["Piano"]
+                  if e.velocity != MusicAnvil.KEYSWITCH_VELOCITY]
+        for switch in self._switches(section):
+            self.assertTrue(any(note.start_sub >= switch.end_sub for note in played))
+
+    def test_only_changes_of_articulation_are_switched(self):
+        """A keyswitch holds until the next one, so repeating it would be noise."""
+        section = self._render()
+        MusicAnvil.apply_keyswitches(section, self.TABLE)
+        switches = sorted(self._switches(section), key=lambda e: e.start_sub)
+        for current, following in zip(switches, switches[1:]):
+            self.assertNotEqual(current.pitch, following.pitch)
+
+    def test_articulation_of_reads_the_shaped_note(self):
+        section = self._render()
+        ctx = section.context
+        muted = MusicAnvil.NoteEvent(start_sub=0, length_sub=2, pitch=60, velocity=90, gate=0.3)
+        held = MusicAnvil.NoteEvent(start_sub=0, length_sub=ctx.subs_per_beat * 4,
+                                    pitch=60, velocity=90, gate=1.0)
+        plain = MusicAnvil.NoteEvent(start_sub=0, length_sub=2, pitch=60, velocity=90, gate=0.9)
+        self.assertEqual(MusicAnvil.articulation_of(muted, ctx), MusicAnvil.ARTICULATION_MUTED)
+        self.assertEqual(MusicAnvil.articulation_of(held, ctx), MusicAnvil.ARTICULATION_SUSTAIN)
+        self.assertEqual(MusicAnvil.articulation_of(plain, ctx), MusicAnvil.ARTICULATION_NORMAL)
+
+    def test_switches_are_quiet(self):
+        section = self._render()
+        MusicAnvil.apply_keyswitches(section, self.TABLE)
+        for switch in self._switches(section):
+            self.assertEqual(switch.velocity, MusicAnvil.KEYSWITCH_VELOCITY)
+            self.assertEqual(switch.length_sub, 1)
+
+
 class TestTempoInternalsGuard(unittest.TestCase):
     """ToDo 2.1 — _insert_midi_tempo_change reaches into private pretty_midi members.
 

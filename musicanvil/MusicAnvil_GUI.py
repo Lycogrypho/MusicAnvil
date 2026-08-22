@@ -48,6 +48,7 @@ ARTIC_PARAMS = [
 TOGGLE_PARAMS = [
     ("auto_cadence", "Open/closed phrase endings", bool(_PIECE_DEFAULTS["auto_cadence"])),
     ("drum_fills",   "Drum fills at phrase ends",  bool(_PIECE_DEFAULTS["drum_fills"])),
+    ("expression",   "Expression (CC swells, bends)", bool(_PIECE_DEFAULTS["expression"])),
 ]
 
 
@@ -84,7 +85,7 @@ PROJECT_VERSION = 2
 # simply lack those keys and fall back to the piece defaults when loaded.
 _MUSICAL_FIELDS = (
     "phrase_bars", "metric_accent", "intensity", "final_lengthening", "lead_syncopation",
-    "auto_cadence", "cadence_beats", "drum_fills",
+    "auto_cadence", "cadence_beats", "drum_fills", "expression",
 )
 _SECTION_SCALAR_FIELDS = (
     "bars", "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",

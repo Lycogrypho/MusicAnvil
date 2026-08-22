@@ -45,6 +45,14 @@ package "musicanvil" {
     +apply_final_lengthening(events, ctx, phrases, factor)
     +apply_phrase_cadences(section, beats)
     +add_drum_fills(notes, ctx, phrases)
+    .. expression layer ..
+    +apply_expression(section)        ' CC 91/93 sends, CC 11 swells
+    +apply_pitch_bends(section)       ' bends, slides, CC 1 vibrato
+    +apply_palm_mutes(section)
+    +apply_portamento(section) / +add_fret_noise(section)
+    +apply_keyswitches(section, table)
+    +articulation_of(event, ctx)
+    +is_power_chord_instrument(name)
     .. phrase transformers (registered) ..
     +build_tension(section, bars)
     +release_tension(section, bars)
@@ -72,6 +80,7 @@ package "musicanvil" {
     +beat_sub_unit(tempo, beat_length, mode)
     +make_rhythm_cell(rng, subs_per_beat, beats, ...)
     +metric_weight(beat_in_bar, beats_per_bar)
+    +is_power_chord_program(program)
     +degree_stability(scale_name)
     +preferred_tendency_degree(scale_name)
     +diatonic_triad(scale_name, root_offset)
@@ -92,13 +101,16 @@ package "musicanvil" {
     notes_in_octave / scale_definitions / chord_definitions
     drum_pitches / drum_lines / drum_pattern_beats / drum_fill
     chord_palette_extensions / metric_accents / rhythm_cell / BEAT_MODES
+    CC_* controller numbers / expression_settings
+    power_chord_programs / POWER_CHORD / keyswitches
   }
 
   class "MusicAnvil.json" as Config <<configuration>> {
     notes_in_octave / scale_definitions
     chord_definitions / chord_palette_extensions
     drum_pitches / drum_lines / drum_pattern_beats / drum_fill
-    rhythm_cell / metric_accents
+    rhythm_cell / metric_accents / expression
+    power_chord_programs / keyswitches
     beat_modes / instrument_programs / velocities
     piece_defaults / gui
   }
@@ -109,7 +121,7 @@ package "musicanvil" {
       tonic_octave / beat_mode
       phrase_bars / cadence_beats
       metric_accent / intensity / final_lengthening
-      lead_syncopation / auto_cadence / drum_fills
+      lead_syncopation / auto_cadence / drum_fills / expression
       lead_* / bass_gate / chord_* : articulation
       roles : dict[str, RoleAssignment]
       sections : dict[str, SectionSpec]
@@ -159,12 +171,25 @@ package "musicanvil" {
       degree / phrase / metric_weight
       is_phrase_final : bool
     }
+    class ControlEvent {
+      start_sub : int
+      number : int   ' ma_utils.CC_*
+      value : int
+    }
+    class BendEvent {
+      start_sub : int
+      pitch : int    ' -8192..8191, 0 = centre
+    }
     class RenderedSection {
       name / context / phrases
       events : dict[instrument, [NoteEvent]]
       drums : [pretty_midi.Note]
       roles : dict[instrument, ROLE_*]
+      controls : dict[instrument, [ControlEvent]]
+      bends : dict[instrument, [BendEvent]]
       +tracks() / +copy()
+      +control_changes() / +pitch_bends()
+      +add_control(...) / +add_bend(...)
     }
   }
 }
@@ -215,6 +240,8 @@ RhythmCell ..> NoteEvent : tile() -> onsets
 RenderedSection "1" *-- "1" RenderContext
 RenderedSection "1" *-- "0..*" Phrase
 RenderedSection "1" *-- "0..*" NoteEvent
+RenderedSection "1" *-- "0..*" ControlEvent
+RenderedSection "1" *-- "0..*" BendEvent
 Engine ..> MusicalTime : generates, shapes,\nthen materialises
 
 ' --- transformers ---
@@ -236,7 +263,9 @@ note right of Engine
     plan_phrases -> make_cell -> generate_* (NoteEvent)
     -> accelerate_harmony -> metric accents
     -> final lengthening -> phrase cadences
-    -> drum fills -> materialise
+    -> drum fills -> expression (CC/bends,
+       palm mutes, portamento, fret noise)
+    -> keyswitches -> materialise
   render_piece renders each library section once,
   reuses it at every occurrence, and emits a
   tempo-change and a time-signature event at each
@@ -249,6 +278,11 @@ note bottom of Utils
   so it spans exactly one bar of the signature;
   degree_stability()/diatonic_triad() supply the
   open and closed endings the cadences aim at.
+  A MIDI file carries no audio: distortion is a
+  property of the chosen program, so ma_utils
+  only owns the controllers a GM player honours
+  (there is no CC for gain) and the list of
+  programs voiced as power chords.
 end note
 
 @enduml
