@@ -170,6 +170,28 @@
     "chromatic":        []
   },
 
+  "drum_fill": {
+    "pitches": ["Tom 1", "Tom 2", "Snare Drum"],
+    "velocity": 104,
+    "notes_per_beat": 2,
+    "crash": "Crash Cymbal",
+    "crash_velocity": 112
+  },
+
+  "rhythm_cell": {
+    "durations_in_beats": [0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
+    "weights": [18, 34, 6, 26, 6, 10],
+    "cell_bars": 1
+  },
+
+  "metric_accents": {
+    "downbeat": 1.0,
+    "secondary": 0.85,
+    "beat": 0.7,
+    "offbeat": 0.5,
+    "reference": 0.7
+  },
+
   "beat_modes": {
     "1 — Fixed 16th-note": 1,
     "2 — Half-beat": 2
@@ -203,6 +225,14 @@
     "tonic": "C",
     "tonic_octave": 4,
     "beat_mode": 1,
+    "phrase_bars": 0,
+    "metric_accent": 12,
+    "intensity": 1.0,
+    "final_lengthening": 1.5,
+    "lead_syncopation": 0.25,
+    "auto_cadence": true,
+    "cadence_beats": 1,
+    "drum_fills": true,
     "lead_rest_prob": 0.08,
     "lead_sustain": 0.95,
     "lead_velocity_jitter": 12,

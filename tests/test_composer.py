@@ -315,10 +315,29 @@ class TestSupportDerivation(unittest.TestCase):
             beat_in_bar = int(round(note.start / beat_len)) % 4
             self.assertLess(beat_in_bar, 2)
 
-    def test_supports_use_support_velocity(self):
+    def test_supports_are_quieter_than_their_main_line(self):
+        """Support velocities start from VELOCITY_SUPPORT; the metre then accents them
+        (ToDo 4.3), so the exact value depends on the bar position — but a support note
+        can never be louder than its main line at the same position."""
+        span = MusicAnvil.PieceSpec().metric_accent
         for name in ("Violin", "Trumpet"):
-            for note in self.tracks.get(name, []):
-                self.assertEqual(note.velocity, MusicAnvil.VELOCITY_SUPPORT)
+            notes = self.tracks.get(name, [])
+            self.assertTrue(notes, name)
+            for note in notes:
+                self.assertLessEqual(note.velocity, MusicAnvil.VELOCITY_SUPPORT + span)
+                self.assertLess(note.velocity, MusicAnvil.VELOCITY_LEAD)
+
+    def test_supports_use_support_velocity_without_accents(self):
+        """With the metric accent switched off, the base velocity is untouched."""
+        piece = _make_piece(bars=2)
+        piece.metric_accent = 0
+        piece.auto_cadence = False      # the cadence swell is 4.6's, not the base velocity
+        piece.roles[MusicAnvil.ROLE_LEAD].supports = ["Violin"]
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        tracks, _ = MusicAnvil.render_section(resolved, random.Random(3))
+        self.assertTrue(tracks.get("Violin"))
+        for note in tracks["Violin"]:
+            self.assertEqual(note.velocity, MusicAnvil.VELOCITY_SUPPORT)
 
 
 class TestRenderPiece(unittest.TestCase):
@@ -663,6 +682,1060 @@ class TestTempoChangeEvents(unittest.TestCase):
         self.assertEqual(len(tempos), 3)
 
 
+class TestMetricAccents(unittest.TestCase):
+    """ToDo 4.3 — velocity must follow the metre, not a symmetric random jitter."""
+
+    def _ctx(self, signature=(4, 4), bars=2):
+        piece = _make_piece(bars=bars)
+        piece.signature = signature
+        return MusicAnvil.make_render_context(
+            MusicAnvil.resolve_section(piece.sections["A"], piece))
+
+    def _events(self, ctx, subs):
+        return [MusicAnvil.NoteEvent(start_sub=s, length_sub=1, pitch=60, velocity=90)
+                for s in subs]
+
+    def test_accent_delta_is_zero_on_a_plain_beat(self):
+        weights = ma_utils.metric_accents
+        self.assertEqual(MusicAnvil.accent_delta(weights["beat"], 12), 0)
+
+    def test_accent_delta_matches_the_requested_span_on_the_downbeat(self):
+        self.assertEqual(MusicAnvil.accent_delta(ma_utils.metric_accents["downbeat"], 12), 12)
+        self.assertEqual(MusicAnvil.accent_delta(ma_utils.metric_accents["downbeat"], 20), 20)
+
+    def test_accent_delta_is_negative_off_the_beat(self):
+        self.assertLess(MusicAnvil.accent_delta(ma_utils.metric_accents["offbeat"], 12), 0)
+
+    def test_accent_delta_of_zero_amount_is_zero(self):
+        for weight in ma_utils.metric_accents.values():
+            self.assertEqual(MusicAnvil.accent_delta(weight, 0), 0)
+
+    def test_downbeat_is_louder_than_offbeat(self):
+        ctx = self._ctx()
+        events = self._events(ctx, [0, 1, ctx.subs_per_beat, 2 * ctx.subs_per_beat])
+        MusicAnvil.apply_metric_accents(events, ctx, amount=12)
+        downbeat, offbeat, beat_two, beat_three = events
+        self.assertGreater(downbeat.velocity, beat_two.velocity)
+        self.assertGreater(beat_two.velocity, offbeat.velocity)
+        self.assertGreater(beat_three.velocity, beat_two.velocity)  # middle of the bar
+
+    def test_metric_weight_is_recorded_on_the_event(self):
+        ctx = self._ctx()
+        events = self._events(ctx, [0, 1])
+        MusicAnvil.apply_metric_accents(events, ctx, amount=12)
+        self.assertEqual(events[0].metric_weight, ma_utils.metric_accents["downbeat"])
+        self.assertEqual(events[1].metric_weight, ma_utils.metric_accents["offbeat"])
+
+    def test_zero_amount_leaves_velocities_untouched(self):
+        ctx = self._ctx()
+        events = self._events(ctx, [0, 1, 5])
+        MusicAnvil.apply_metric_accents(events, ctx, amount=0)
+        self.assertEqual([e.velocity for e in events], [90, 90, 90])
+
+    def test_intensity_scales_the_whole_section(self):
+        ctx = self._ctx()
+        quiet = self._events(ctx, [0, 4])
+        loud = self._events(ctx, [0, 4])
+        MusicAnvil.apply_metric_accents(quiet, ctx, amount=0, intensity=0.5)
+        MusicAnvil.apply_metric_accents(loud, ctx, amount=0, intensity=1.2)
+        self.assertEqual([e.velocity for e in quiet], [45, 45])
+        self.assertEqual([e.velocity for e in loud], [108, 108])
+
+    def test_velocities_stay_in_the_midi_range(self):
+        ctx = self._ctx()
+        events = [MusicAnvil.NoteEvent(start_sub=0, length_sub=1, pitch=60, velocity=126),
+                  MusicAnvil.NoteEvent(start_sub=1, length_sub=1, pitch=60, velocity=2)]
+        MusicAnvil.apply_metric_accents(events, ctx, amount=40, intensity=2.0)
+        for event in events:
+            self.assertGreaterEqual(event.velocity, 1)
+            self.assertLessEqual(event.velocity, 127)
+
+    def test_compound_signature_accents_every_third_beat(self):
+        ctx = self._ctx(signature=(6, 8))
+        events = self._events(ctx, [0, ctx.subs_per_beat, 3 * ctx.subs_per_beat])
+        MusicAnvil.apply_metric_accents(events, ctx, amount=12)
+        downbeat, beat_two, beat_four = events
+        self.assertGreater(downbeat.velocity, beat_four.velocity)
+        self.assertGreater(beat_four.velocity, beat_two.velocity)
+
+    def test_drums_are_accented_too(self):
+        ctx = self._ctx()
+        offbeat = ctx.beat_len / 2
+        notes = [pretty_midi.Note(velocity=90, pitch=35, start=0.0, end=0.1),
+                 pretty_midi.Note(velocity=90, pitch=42, start=offbeat, end=offbeat + 0.1)]
+        shaped = MusicAnvil.apply_drum_accents(notes, ctx, amount=12)
+        self.assertGreater(shaped[0].velocity, shaped[1].velocity)
+        self.assertEqual([n.pitch for n in shaped], [35, 42])
+        self.assertEqual([n.start for n in shaped], [n.start for n in notes])
+
+    def test_rendered_lead_is_louder_on_downbeats_than_off_the_beat(self):
+        piece = _make_piece(bars=4)
+        piece.lead_velocity_jitter = 0            # isolate the metric contribution
+        piece.lead_rest_prob = 0.0
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(11))
+        lead = rendered.events["Piano"]
+        downbeats = [e.velocity for e in lead if e.start_sub % rendered.context.subs_per_bar == 0]
+        offbeats = [e.velocity for e in lead if e.start_sub % rendered.context.subs_per_beat != 0]
+        self.assertTrue(downbeats and offbeats)
+        self.assertGreater(min(downbeats), max(offbeats))
+
+    def test_section_intensity_override_changes_the_rendered_velocities(self):
+        piece = _make_piece(bars=2)
+        piece.lead_velocity_jitter = 0
+        loud = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        piece.sections["A"].intensity = 0.6
+        quiet = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        loud_tracks, _ = MusicAnvil.render_section(loud, random.Random(4))
+        quiet_tracks, _ = MusicAnvil.render_section(quiet, random.Random(4))
+        loud_notes = loud_tracks["Piano"]
+        quiet_notes = quiet_tracks["Piano"]
+        self.assertEqual(len(loud_notes), len(quiet_notes))
+        self.assertTrue(all(q.velocity < l.velocity
+                            for q, l in zip(quiet_notes, loud_notes)))
+
+    def test_intensity_defaults_to_neutral(self):
+        self.assertEqual(MusicAnvil.PieceSpec().intensity, 1.0)
+        self.assertIsNone(MusicAnvil.SectionSpec(name="x").intensity)
+
+
+class TestFinalLengthening(unittest.TestCase):
+    """ToDo 4.4 — the last note of a phrase must be held, not cut off."""
+
+    def _setup(self, bars=4, phrase_bars=2):
+        piece = _make_piece(bars=bars)
+        piece.sections["A"].phrase_bars = phrase_bars
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        ctx = MusicAnvil.make_render_context(resolved)
+        phrases = MusicAnvil.plan_phrases(ctx, phrase_bars)
+        return ctx, phrases
+
+    def _events(self, ctx, phrases, starts, length_sub=2, gate=0.8):
+        events = [MusicAnvil.NoteEvent(start_sub=s, length_sub=length_sub, pitch=60,
+                                       velocity=90, gate=gate) for s in starts]
+        MusicAnvil.assign_phrases(events, ctx, phrases)
+        return events
+
+    def test_phrase_final_note_is_stretched(self):
+        ctx, phrases = self._setup()
+        first_phrase_end = phrases[0].end_beat * ctx.subs_per_beat
+        events = self._events(ctx, phrases, [0, first_phrase_end - 8])
+        MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=2.0)
+        self.assertEqual(events[0].length_sub, 2)      # not phrase-final
+        self.assertEqual(events[1].length_sub, 4)      # phrase-final, doubled
+
+    def test_phrase_final_note_rings_to_its_full_length(self):
+        ctx, phrases = self._setup()
+        events = self._events(ctx, phrases, [0, 8], gate=0.8)
+        MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=2.0)
+        final = [e for e in events if e.is_phrase_final][0]
+        self.assertEqual(final.gate, 1.0)
+
+    def test_a_stretched_note_never_crosses_the_phrase_boundary(self):
+        ctx, phrases = self._setup()
+        for phrase in phrases:
+            end_sub = phrase.end_beat * ctx.subs_per_beat
+            events = self._events(ctx, phrases, [end_sub - 2], length_sub=2)
+            MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=8.0)
+            self.assertLessEqual(events[0].end_sub, end_sub)
+
+    def test_a_note_already_reaching_the_boundary_is_not_shortened(self):
+        """Lengthening must never take time away — a note tied over the phrase end keeps
+        the length the generator gave it."""
+        ctx, phrases = self._setup()
+        end_sub = phrases[0].end_beat * ctx.subs_per_beat
+        events = self._events(ctx, phrases, [end_sub - 2], length_sub=6)
+        MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=2.0)
+        self.assertEqual(events[0].length_sub, 6)
+
+    def test_factor_one_disables_the_pass(self):
+        ctx, phrases = self._setup()
+        events = self._events(ctx, phrases, [0, 8], gate=0.8)
+        before = [(e.length_sub, e.gate) for e in events]
+        MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=1.0)
+        self.assertEqual([(e.length_sub, e.gate) for e in events], before)
+
+    def test_non_final_notes_are_untouched(self):
+        ctx, phrases = self._setup()
+        events = self._events(ctx, phrases, [0, 4, 8], gate=0.8)
+        MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=3.0)
+        for event in events:
+            if not event.is_phrase_final:
+                self.assertEqual((event.length_sub, event.gate), (2, 0.8))
+
+    def test_every_phrase_gets_a_lengthened_note(self):
+        ctx, phrases = self._setup(bars=4, phrase_bars=1)
+        starts = [phrase.start_beat * ctx.subs_per_beat for phrase in phrases]
+        starts += [phrase.end_beat * ctx.subs_per_beat - 4 for phrase in phrases]
+        events = self._events(ctx, phrases, sorted(starts))
+        MusicAnvil.apply_final_lengthening(events, ctx, phrases, factor=2.0)
+        stretched = {e.phrase for e in events if e.length_sub > 2}
+        self.assertEqual(stretched, {phrase.index for phrase in phrases})
+
+    def test_rendered_phrase_endings_sound_longer_than_without_the_pass(self):
+        """Same seed, pass on vs off: no phrase ending may get shorter and at least one
+        must get longer."""
+        def render(factor):
+            piece = _make_piece(bars=4)
+            piece.sections["A"].phrase_bars = 2
+            piece.auto_cadence = False      # isolate the agogic pass from 4.6's cadences
+            piece.final_lengthening = factor
+            resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+            rendered = MusicAnvil._render_section_events(resolved, random.Random(9))
+            notes = MusicAnvil.materialise(rendered.events["Piano"], rendered.context)
+            finals = [i for i, e in enumerate(rendered.events["Piano"]) if e.is_phrase_final]
+            return [notes[i].end - notes[i].start for i in finals]
+
+        plain, stretched = render(1.0), render(2.0)
+        self.assertEqual(len(plain), len(stretched))
+        self.assertTrue(all(s >= p - 1e-9 for p, s in zip(plain, stretched)))
+        self.assertTrue(any(s > p + 1e-9 for p, s in zip(plain, stretched)),
+                        "no phrase ending was actually lengthened")
+
+    def test_rendered_phrase_endings_sound_to_the_end_of_their_note(self):
+        piece = _make_piece(bars=4)
+        piece.final_lengthening = 2.0
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(9))
+        for event in rendered.events["Piano"]:
+            if event.is_phrase_final:
+                self.assertEqual(event.gate, 1.0)
+
+    def test_notes_still_stay_inside_the_section(self):
+        piece = _make_piece(bars=4)
+        piece.final_lengthening = 4.0
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        tracks, length = MusicAnvil.render_section(resolved, random.Random(9))
+        for notes in tracks.values():
+            for note in notes:
+                self.assertLessEqual(note.end, length + 1e-9)
+
+    def test_section_override_wins(self):
+        piece = _make_piece(bars=2)
+        piece.final_lengthening = 1.0
+        piece.sections["A"].final_lengthening = 3.0
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        self.assertEqual(resolved.final_lengthening, 3.0)
+
+    def test_default_comes_from_the_config(self):
+        self.assertEqual(MusicAnvil.PieceSpec().final_lengthening,
+                         ma_utils.get_param("piece_defaults", "final_lengthening"))
+
+
+class TestRhythmicMotif(unittest.TestCase):
+    """ToDo 4.2 — the melody must state a motif, repeat it and then fragment it."""
+
+    def _ctx(self, bars=4, signature=(4, 4)):
+        piece = _make_piece(bars=bars)
+        piece.signature = signature
+        return MusicAnvil.make_render_context(
+            MusicAnvil.resolve_section(piece.sections["A"], piece))
+
+    def test_make_cell_spans_one_bar_by_default(self):
+        ctx = self._ctx()
+        cell = MusicAnvil.make_cell(ctx, random.Random(2))
+        self.assertEqual(cell.length_sub, ctx.subs_per_bar)
+
+    def test_make_cell_respects_an_explicit_length(self):
+        ctx = self._ctx(bars=4)
+        cell = MusicAnvil.make_cell(ctx, random.Random(2), bars=2)
+        self.assertEqual(cell.length_sub, 2 * ctx.subs_per_bar)
+
+    def test_cell_never_outlasts_the_section(self):
+        ctx = self._ctx(bars=1)
+        cell = MusicAnvil.make_cell(ctx, random.Random(2), bars=8)
+        self.assertLessEqual(cell.length_sub, ctx.total_sub)
+
+    def test_fragmentation_states_the_first_half_twice(self):
+        cell = MusicAnvil.RhythmCell(onsets=[(0, 4), (4, 4), (8, 8)], length_sub=16)
+        fragment = cell.fragmented()
+        self.assertEqual(fragment.onsets, [(0, 4), (4, 4), (8, 4), (12, 4)])
+        self.assertEqual(fragment.length_sub, 16)
+
+    def test_fragmentation_of_a_single_note_cell_is_safe(self):
+        cell = MusicAnvil.RhythmCell(onsets=[(0, 16)], length_sub=16)
+        fragment = cell.fragmented()
+        self.assertEqual(fragment.onsets, [(0, 8), (8, 8)])
+
+    def test_tiling_fills_the_section(self):
+        cell = MusicAnvil.RhythmCell(onsets=[(0, 4), (4, 4)], length_sub=8)
+        positions = cell.tile(24)
+        self.assertEqual(positions[0][0], 0)
+        self.assertEqual(positions[-1][0] + positions[-1][1], 24)
+
+    def test_tiling_switches_to_the_fragment_in_the_continuation(self):
+        cell = MusicAnvil.RhythmCell(onsets=[(0, 8)], length_sub=8)
+        positions = cell.tile(16, continuation_from=8)
+        self.assertEqual(positions, [(0, 8), (8, 4), (12, 4)])
+
+    def test_tiling_never_starts_a_note_past_the_end(self):
+        cell = MusicAnvil.RhythmCell(onsets=[(0, 4), (4, 4)], length_sub=8)
+        for start, length in cell.tile(10):
+            self.assertLess(start, 10)
+            self.assertLessEqual(start + length, 10)
+
+    def test_the_melody_repeats_its_cell_bar_after_bar(self):
+        """With rests switched off, the presentation bars must share one onset pattern —
+        the property that a stream of independent random durations cannot have."""
+        piece = _make_piece(bars=4)
+        piece.lead_rest_prob = 0.0
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(6))
+        ctx = rendered.context
+        bars = {}
+        for event in rendered.events["Piano"]:
+            bars.setdefault(event.start_sub // ctx.subs_per_bar, []).append(
+                (event.start_sub % ctx.subs_per_bar, event.length_sub))
+        self.assertEqual(bars[0], bars[1], "the motif was not repeated")
+
+    def test_note_lengths_are_not_uniformly_distributed(self):
+        """The old generator drew every length from randint(1, 8); the cell vocabulary is
+        weighted towards short values."""
+        piece = _make_piece(bars=8)
+        piece.lead_rest_prob = 0.0
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(6))
+        lengths = [e.length_sub for e in rendered.events["Piano"]]
+        self.assertGreater(sum(1 for l in lengths if l <= 2), len(lengths) / 2)
+
+    def test_syncopation_puts_more_notes_off_the_beat(self):
+        def off_beat_share(amount):
+            total = off = 0
+            for seed in range(6):
+                piece = _make_piece(bars=4)
+                piece.lead_rest_prob = 0.0
+                piece.lead_syncopation = amount
+                resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+                rendered = MusicAnvil._render_section_events(resolved, random.Random(seed))
+                spb = rendered.context.subs_per_beat
+                for event in rendered.events["Piano"]:
+                    total += 1
+                    off += 1 if event.start_sub % spb else 0
+            return off / max(1, total)
+
+        self.assertGreater(off_beat_share(1.0), off_beat_share(0.0))
+
+    def test_lead_syncopation_defaults_and_overrides(self):
+        self.assertEqual(MusicAnvil.PieceSpec().lead_syncopation,
+                         ma_utils.get_param("piece_defaults", "lead_syncopation"))
+        piece = _make_piece()
+        piece.sections["A"].lead_syncopation = 0.9
+        self.assertEqual(
+            MusicAnvil.resolve_section(piece.sections["A"], piece).lead_syncopation, 0.9)
+
+    def test_lead_notes_still_land_on_the_grid_and_inside_the_section(self):
+        for signature in ((4, 4), (3, 4), (6, 8), (5, 4)):
+            with self.subTest(signature=signature):
+                piece = _make_piece(bars=2)
+                piece.signature = signature
+                resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+                rendered = MusicAnvil._render_section_events(resolved, random.Random(4))
+                for event in rendered.events["Piano"]:
+                    self.assertGreaterEqual(event.start_sub, 0)
+                    self.assertLess(event.start_sub, rendered.context.total_sub)
+
+
+class TestBassBreathes(unittest.TestCase):
+    """ToDo 4.2 — the bass must not hammer exactly one note on every beat."""
+
+    def _render(self, bars=8, seed=3):
+        piece = _make_piece(bars=bars)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def test_bass_notes_start_on_beats(self):
+        rendered = self._render()
+        spb = rendered.context.subs_per_beat
+        for event in rendered.events["Bass"]:
+            self.assertEqual(event.start_sub % spb, 0)
+
+    def test_some_bass_notes_are_held_over_two_beats(self):
+        spans = set()
+        for seed in range(8):
+            rendered = self._render(seed=seed)
+            spb = rendered.context.subs_per_beat
+            spans.update(event.length_sub // spb for event in rendered.events["Bass"])
+        self.assertIn(2, spans, "the bass never holds a note across a beat")
+
+    def test_bass_notes_never_overlap(self):
+        for seed in range(8):
+            rendered = self._render(seed=seed)
+            events = sorted(rendered.events["Bass"], key=lambda e: e.start_sub)
+            for current, following in zip(events, events[1:]):
+                self.assertLessEqual(current.end_sub, following.start_sub)
+
+    def test_the_downbeat_is_always_played(self):
+        for seed in range(6):
+            rendered = self._render(seed=seed)
+            starts = {event.start_sub for event in rendered.events["Bass"]}
+            self.assertIn(0, starts)
+
+
+class TestChordsAreHeld(unittest.TestCase):
+    """ToDo 4.2 — an unchanged harmony is sustained, not re-struck every beat."""
+
+    def _ctx(self):
+        piece = _make_piece(bars=2)
+        return MusicAnvil.make_render_context(
+            MusicAnvil.resolve_section(piece.sections["A"], piece))
+
+    def _chord(self, start, pitches, length=None):
+        length = length if length is not None else self._ctx().subs_per_beat
+        return [MusicAnvil.NoteEvent(start_sub=start, length_sub=length, pitch=p,
+                                     velocity=78, gate=0.85) for p in pitches]
+
+    def test_identical_consecutive_chords_merge(self):
+        ctx = self._ctx()
+        events = self._chord(0, [60, 64, 67]) + self._chord(4, [60, 64, 67])
+        merged = MusicAnvil.merge_repeated_chords(events, ctx)
+        self.assertEqual(len(merged), 3)
+        self.assertTrue(all(e.start_sub == 0 and e.length_sub == 8 for e in merged))
+
+    def test_different_chords_are_left_alone(self):
+        ctx = self._ctx()
+        events = self._chord(0, [60, 64, 67]) + self._chord(4, [62, 65, 69])
+        merged = MusicAnvil.merge_repeated_chords(events, ctx)
+        self.assertEqual(sorted({e.start_sub for e in merged}), [0, 4])
+        self.assertTrue(all(e.length_sub == 4 for e in merged))
+
+    def test_a_gap_prevents_merging(self):
+        ctx = self._ctx()
+        events = self._chord(0, [60, 64, 67]) + self._chord(8, [60, 64, 67])
+        merged = MusicAnvil.merge_repeated_chords(events, ctx)
+        self.assertEqual(sorted({e.start_sub for e in merged}), [0, 8])
+
+    def test_three_in_a_row_merge_into_one(self):
+        ctx = self._ctx()
+        events = (self._chord(0, [60, 64]) + self._chord(4, [60, 64])
+                  + self._chord(8, [60, 64]))
+        merged = MusicAnvil.merge_repeated_chords(events, ctx)
+        self.assertEqual({e.length_sub for e in merged}, {12})
+
+    def test_empty_input(self):
+        self.assertEqual(MusicAnvil.merge_repeated_chords([], self._ctx()), [])
+
+    def test_a_chord_is_held_while_the_melody_stays_inside_it(self):
+        ctx = self._ctx()
+        spb = ctx.subs_per_beat
+        chords = self._chord(0, [60, 64, 67]) + self._chord(spb, [64, 67, 72])
+        lead = [MusicAnvil.NoteEvent(start_sub=0, length_sub=spb, pitch=64, velocity=100),
+                MusicAnvil.NoteEvent(start_sub=spb, length_sub=spb, pitch=67, velocity=100)]
+        held = MusicAnvil.sustain_chords(chords, lead, ctx)
+        self.assertEqual({e.start_sub for e in held}, {0})
+        self.assertTrue(all(e.length_sub == 2 * spb for e in held))
+
+    def test_a_new_chord_is_struck_when_the_melody_leaves(self):
+        ctx = self._ctx()
+        spb = ctx.subs_per_beat
+        chords = self._chord(0, [60, 64, 67]) + self._chord(spb, [62, 65, 69])
+        lead = [MusicAnvil.NoteEvent(start_sub=0, length_sub=spb, pitch=64, velocity=100),
+                MusicAnvil.NoteEvent(start_sub=spb, length_sub=spb, pitch=62, velocity=100)]
+        held = MusicAnvil.sustain_chords(chords, lead, ctx)
+        self.assertEqual(sorted({e.start_sub for e in held}), [0, spb])
+
+    def test_sustain_chords_handles_no_chords(self):
+        self.assertEqual(MusicAnvil.sustain_chords([], [], self._ctx()), [])
+
+    def test_sustain_chords_does_not_bridge_a_silent_beat(self):
+        ctx = self._ctx()
+        spb = ctx.subs_per_beat
+        chords = self._chord(0, [60, 64, 67]) + self._chord(3 * spb, [60, 64, 67])
+        held = MusicAnvil.sustain_chords(chords, [], ctx)
+        self.assertEqual(sorted({e.start_sub for e in held}), [0, 3 * spb])
+
+    def test_rendered_accompaniment_holds_chords(self):
+        piece = _make_piece(bars=4)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(2))
+        spb = rendered.context.subs_per_beat
+        spans = [event.length_sub // spb for event in rendered.events["Guitar"]]
+        self.assertTrue(spans)
+        self.assertTrue(any(span >= 2 for span in spans),
+                        "no chord was held across more than one beat")
+
+    def test_held_chords_do_not_overlap_the_next_chord(self):
+        piece = _make_piece(bars=4)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(2))
+        notes = sorted(MusicAnvil.materialise(rendered.events["Guitar"], rendered.context),
+                       key=lambda n: (n.start, n.pitch))
+        starts = sorted({round(n.start, 9) for n in notes})
+        for note in notes:
+            later = [s for s in starts if s > note.start + 1e-9]
+            if later:
+                self.assertLessEqual(note.end, later[0] + 1e-9)
+
+
+class TestPhraseTransformers(unittest.TestCase):
+    """ToDo 4.5 — a phrase transformer receives the whole rendered section in musical
+    time, so it can shape a cadence across every role at once."""
+
+    NAME = "test_phrase_transformer"
+
+    def setUp(self):
+        self.seen = []
+
+        def transformer(section, semitones=0):
+            self.seen.append(section)
+            for events in section.events.values():
+                for event in events:
+                    event.pitch = max(0, min(127, event.pitch + semitones))
+            return section
+
+        ma_utils.register_transformer(self.NAME, transformer,
+                                      kind=ma_utils.TRANSFORMER_PHRASE,
+                                      params=[{"name": "semitones", "label": "Semitones",
+                                               "type": "int", "default": 0,
+                                               "min": -24, "max": 24}])
+
+    def tearDown(self):
+        ma_utils.BEAT_TRANSFORMERS.pop(self.NAME, None)
+        ma_utils.TRANSFORMER_SPECS.pop(self.NAME, None)
+
+    def _piece(self, **kwargs):
+        piece = _make_piece(structure=["A", MusicAnvil.StructureEntry(
+            section="A", transformer=self.NAME, transformer_kwargs=kwargs)], bars=2)
+        return piece
+
+    def test_phrase_transformer_receives_a_rendered_section(self):
+        MusicAnvil.render_piece(self._piece(), random.Random(1))
+        self.assertEqual(len(self.seen), 1)
+        section = self.seen[0]
+        self.assertIsInstance(section, MusicAnvil.RenderedSection)
+        self.assertIsInstance(section.context, MusicAnvil.RenderContext)
+        self.assertTrue(section.phrases)
+        self.assertTrue(section.events)
+
+    def test_phrase_transformer_output_reaches_the_midi(self):
+        midi = MusicAnvil.render_piece(self._piece(semitones=5), random.Random(1))
+        piano = [inst for inst in midi.instruments if inst.name == "Piano"][0]
+        first = [n for n in piano.notes if n.start < 4.0]
+        second = [n for n in piano.notes if n.start >= 4.0]
+        self.assertTrue(first and second)
+        self.assertEqual([n.pitch + 5 for n in first], [n.pitch for n in second])
+
+    def test_the_cached_section_is_not_mutated(self):
+        """A transformed occurrence must not change the other occurrences."""
+        piece = _make_piece(structure=[
+            "A",
+            MusicAnvil.StructureEntry(section="A", transformer=self.NAME,
+                                      transformer_kwargs={"semitones": 7}),
+            "A",
+        ], bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(1))
+        piano = [inst for inst in midi.instruments if inst.name == "Piano"][0]
+        first = [n.pitch for n in piano.notes if n.start < 4.0]
+        third = [n.pitch for n in piano.notes if n.start >= 8.0]
+        self.assertTrue(first)
+        self.assertEqual(first, third)
+
+    def test_phrase_transformers_can_touch_the_drums(self):
+        def silence_drums(section):
+            section.drums = []
+            return section
+
+        ma_utils.register_transformer("test_drum_killer", silence_drums,
+                                      kind=ma_utils.TRANSFORMER_PHRASE)
+        try:
+            piece = _make_piece(structure=[MusicAnvil.StructureEntry(
+                section="A", transformer="test_drum_killer")], bars=2)
+            midi = MusicAnvil.render_piece(piece, random.Random(1))
+            drums = [inst for inst in midi.instruments if inst.is_drum]
+            self.assertTrue(all(not inst.notes for inst in drums))
+        finally:
+            ma_utils.BEAT_TRANSFORMERS.pop("test_drum_killer", None)
+            ma_utils.TRANSFORMER_SPECS.pop("test_drum_killer", None)
+
+    def test_note_transformers_still_skip_the_drums(self):
+        piece = _make_piece(structure=[MusicAnvil.StructureEntry(
+            section="A", transformer="tone_shift", transformer_kwargs={"n": 3})], bars=2)
+        plain = MusicAnvil.render_piece(_make_piece(structure=["A"], bars=2), random.Random(1))
+        shifted = MusicAnvil.render_piece(piece, random.Random(1))
+
+        def drums(midi):
+            return [(n.pitch, round(n.start, 6))
+                    for inst in midi.instruments if inst.is_drum for n in inst.notes]
+
+        self.assertEqual(drums(plain), drums(shifted))
+
+    def test_rendered_section_copy_is_independent(self):
+        piece = _make_piece(bars=2)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        original = MusicAnvil._render_section_events(resolved, random.Random(1))
+        clone = original.copy()
+        for events in clone.events.values():
+            for event in events:
+                event.pitch = 1
+        clone.phrases[0].ending = "mangled"
+        clone.drums.clear()
+        self.assertTrue(all(event.pitch != 1
+                            for events in original.events.values() for event in events))
+        self.assertNotEqual(original.phrases[0].ending, "mangled")
+        self.assertTrue(original.drums)
+
+
+class TestTensionReleaseModifier(unittest.TestCase):
+    """ToDo 4.1 — the requested modifier: build tension over a passage, or release it.
+
+    Tension leaves the ending open (melody rising to a tendency tone, harmony on the
+    fifth, velocities swelling); release closes it (melody falling to the tonic, tonic
+    triad, velocities tapering). Both hold the final note.
+    """
+
+    def _rendered(self, mode, bars=1, scale="major", tonic="C", signature=(4, 4),
+                  section_bars=2, seed=5):
+        piece = _make_piece(bars=section_bars)
+        piece.scale, piece.tonic, piece.signature = scale, tonic, signature
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        section = MusicAnvil._render_section_events(resolved, random.Random(seed))
+        return MusicAnvil.shape_phrase_ending(section.copy(), mode=mode, bars=bars), section
+
+    def _closing(self, section, instrument):
+        events = section.events[instrument]
+        last = max(event.start_sub for event in events)
+        return [event for event in events if event.start_sub == last]
+
+    # -- registration ----------------------------------------------------------------
+
+    def test_both_transformers_are_registered_as_phrase_transformers(self):
+        for name in (MusicAnvil.CADENCE_TENSION, MusicAnvil.CADENCE_RELEASE):
+            with self.subTest(name=name):
+                self.assertIn(name, ma_utils.BEAT_TRANSFORMERS)
+                self.assertEqual(ma_utils.transformer_kind(name),
+                                 ma_utils.TRANSFORMER_PHRASE)
+
+    def test_they_declare_a_bars_parameter(self):
+        for name in (MusicAnvil.CADENCE_TENSION, MusicAnvil.CADENCE_RELEASE):
+            with self.subTest(name=name):
+                params = ma_utils.transformer_params(name)
+                self.assertEqual([p["name"] for p in params], ["bars"])
+                self.assertEqual(params[0]["default"], 1)
+
+    # -- melody ----------------------------------------------------------------------
+
+    def test_tension_ends_on_a_tendency_tone(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_TENSION)
+        tonic_pc = shaped.context.scale_pitches[0] % 12
+        _, unstable = ma_utils.degree_stability("major")
+        final = self._closing(shaped, "Piano")[0]
+        self.assertIn((final.pitch - tonic_pc) % 12, unstable)
+
+    def test_tension_ends_on_the_leading_tone_in_a_major_scale(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_TENSION)
+        tonic_pc = shaped.context.scale_pitches[0] % 12
+        self.assertEqual((self._closing(shaped, "Piano")[0].pitch - tonic_pc) % 12, 11)
+
+    def test_release_ends_on_the_tonic(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_RELEASE)
+        tonic_pc = shaped.context.scale_pitches[0] % 12
+        self.assertEqual(self._closing(shaped, "Piano")[0].pitch % 12, tonic_pc)
+
+    def test_tension_rises_above_the_passage(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_TENSION)
+        window = [e for e in shaped.events["Piano"]
+                  if e.start_sub >= shaped.context.total_sub - shaped.context.subs_per_bar]
+        final = max(window, key=lambda e: e.start_sub)
+        self.assertGreaterEqual(final.pitch, max(e.pitch for e in window))
+
+    def test_release_falls_below_the_passage(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_RELEASE)
+        window = [e for e in shaped.events["Piano"]
+                  if e.start_sub >= shaped.context.total_sub - shaped.context.subs_per_bar]
+        final = max(window, key=lambda e: e.start_sub)
+        self.assertLessEqual(final.pitch, min(e.pitch for e in window))
+
+    def test_the_approach_is_ordered_into_a_line(self):
+        for mode, rising in ((MusicAnvil.CADENCE_TENSION, True),
+                             (MusicAnvil.CADENCE_RELEASE, False)):
+            with self.subTest(mode=mode):
+                shaped, _ = self._rendered(mode, section_bars=4, bars=2)
+                ctx = shaped.context
+                window = sorted((e for e in shaped.events["Piano"]
+                                 if e.start_sub >= ctx.total_sub - 2 * ctx.subs_per_bar),
+                                key=lambda e: e.start_sub)
+                approach = [e.pitch for e in window[:-1]]
+                self.assertGreater(len(approach), 1)
+                self.assertEqual(approach, sorted(approach, reverse=not rising))
+
+    def test_the_melody_stays_in_the_scale(self):
+        for mode in (MusicAnvil.CADENCE_TENSION, MusicAnvil.CADENCE_RELEASE):
+            with self.subTest(mode=mode):
+                shaped, _ = self._rendered(mode)
+                scale_pcs = {p % 12 for p in shaped.context.scale_pitches}
+                for event in shaped.events["Piano"]:
+                    self.assertIn(event.pitch % 12, scale_pcs)
+
+    # -- harmony and bass ------------------------------------------------------------
+
+    def test_tension_lands_on_the_triad_of_the_fifth(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_TENSION)
+        tonic_pc = shaped.context.scale_pitches[0] % 12
+        pcs = {(e.pitch - tonic_pc) % 12 for e in self._closing(shaped, "Guitar")}
+        self.assertEqual(pcs, set(ma_utils.diatonic_triad("major", 7)))
+
+    def test_release_lands_on_the_tonic_triad(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_RELEASE)
+        tonic_pc = shaped.context.scale_pitches[0] % 12
+        pcs = {(e.pitch - tonic_pc) % 12 for e in self._closing(shaped, "Guitar")}
+        self.assertEqual(pcs, {0, 4, 7})
+
+    def test_the_bass_takes_the_cadence_root(self):
+        tension, _ = self._rendered(MusicAnvil.CADENCE_TENSION)
+        release, _ = self._rendered(MusicAnvil.CADENCE_RELEASE)
+        tonic_pc = tension.context.scale_pitches[0] % 12
+        self.assertEqual((self._closing(tension, "Bass")[0].pitch - tonic_pc) % 12, 7)
+        self.assertEqual((self._closing(release, "Bass")[0].pitch - tonic_pc) % 12, 0)
+
+    def test_the_bass_stays_in_its_register(self):
+        """The cadence root is taken in the bass's own octave — never an octave leap."""
+        for mode in (MusicAnvil.CADENCE_TENSION, MusicAnvil.CADENCE_RELEASE):
+            with self.subTest(mode=mode):
+                shaped, plain = self._rendered(mode)
+                closing = self._closing(shaped, "Bass")[0]
+                original = next(e for e in plain.events["Bass"]
+                                if e.start_sub == closing.start_sub)
+                self.assertLess(abs(closing.pitch - original.pitch), 12)
+
+    # -- duration and dynamics --------------------------------------------------------
+
+    def test_the_final_note_is_held_to_the_end_of_the_section(self):
+        for mode in (MusicAnvil.CADENCE_TENSION, MusicAnvil.CADENCE_RELEASE):
+            with self.subTest(mode=mode):
+                shaped, _ = self._rendered(mode)
+                final = self._closing(shaped, "Piano")[0]
+                self.assertEqual(final.end_sub, shaped.context.total_sub)
+                self.assertEqual(final.gate, 1.0)
+                self.assertTrue(final.is_phrase_final)
+
+    def test_tension_swells_and_release_tapers(self):
+        tension, plain = self._rendered(MusicAnvil.CADENCE_TENSION)
+        release, _ = self._rendered(MusicAnvil.CADENCE_RELEASE)
+        base = self._closing(plain, "Piano")[0].velocity
+        self.assertGreater(self._closing(tension, "Piano")[0].velocity, base)
+        self.assertLess(self._closing(release, "Piano")[0].velocity, base)
+
+    # -- scope and robustness ---------------------------------------------------------
+
+    def test_bars_widens_the_reshaped_window(self):
+        one, plain = self._rendered(MusicAnvil.CADENCE_RELEASE, bars=1, section_bars=4)
+        two, _ = self._rendered(MusicAnvil.CADENCE_RELEASE, bars=2, section_bars=4)
+
+        def changed(shaped):
+            original = {e.start_sub: e.pitch for e in plain.events["Piano"]}
+            return sum(1 for e in shaped.events["Piano"]
+                       if original.get(e.start_sub) != e.pitch)
+
+        self.assertGreater(changed(two), changed(one))
+
+    def test_notes_outside_the_window_are_untouched(self):
+        shaped, plain = self._rendered(MusicAnvil.CADENCE_RELEASE, bars=1, section_bars=4)
+        cut = shaped.context.total_sub - shaped.context.subs_per_bar
+        before = {(e.start_sub, e.pitch, e.velocity) for e in plain.events["Piano"]
+                  if e.start_sub < cut}
+        after = {(e.start_sub, e.pitch, e.velocity) for e in shaped.events["Piano"]
+                 if e.start_sub < cut}
+        self.assertEqual(before, after)
+
+    def test_works_in_a_minor_key_and_an_odd_signature(self):
+        shaped, _ = self._rendered(MusicAnvil.CADENCE_RELEASE, scale="natural_minor",
+                                   tonic="A", signature=(3, 4), section_bars=4)
+        tonic_pc = shaped.context.scale_pitches[0] % 12
+        self.assertEqual(self._closing(shaped, "Piano")[0].pitch % 12, tonic_pc)
+        pcs = {(e.pitch - tonic_pc) % 12 for e in self._closing(shaped, "Guitar")}
+        self.assertEqual(pcs, {0, 3, 7})
+
+    def test_a_section_without_accompaniment_still_works(self):
+        piece = _make_piece(bars=2)
+        piece.roles[MusicAnvil.ROLE_ACCOMPANIMENT] = MusicAnvil.RoleAssignment()
+        piece.roles[MusicAnvil.ROLE_BASS] = MusicAnvil.RoleAssignment()
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        section = MusicAnvil._render_section_events(resolved, random.Random(2))
+        shaped = MusicAnvil.build_tension(section.copy())
+        self.assertTrue(shaped.events["Piano"])
+
+    def test_an_empty_section_is_returned_unchanged(self):
+        piece = _make_piece(bars=2)
+        for role in MusicAnvil.ROLES:
+            piece.roles[role] = MusicAnvil.RoleAssignment()
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        section = MusicAnvil._render_section_events(resolved, random.Random(2))
+        self.assertIs(MusicAnvil.release_tension(section), section)
+
+    # -- through the whole piece -------------------------------------------------------
+
+    def test_attached_to_a_structure_entry(self):
+        piece = _make_piece(structure=[
+            "A",
+            MusicAnvil.StructureEntry(section="A", transformer=MusicAnvil.CADENCE_TENSION),
+            MusicAnvil.StructureEntry(section="A", transformer=MusicAnvil.CADENCE_RELEASE,
+                                      transformer_kwargs={"bars": 1}),
+        ], bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(3))
+        piano = [inst for inst in midi.instruments if inst.name == "Piano"][0]
+        section_len = MusicAnvil.section_seconds(2, 120, (4, 4))
+
+        def final_pitch(index):
+            notes = [n for n in piano.notes
+                     if index * section_len <= n.start < (index + 1) * section_len]
+            return max(notes, key=lambda n: n.start).pitch
+
+        tonic_pc = pretty_midi.note_name_to_number("C4") % 12
+        self.assertEqual((final_pitch(1) - tonic_pc) % 12, 11)   # tension: leading tone
+        self.assertEqual((final_pitch(2) - tonic_pc) % 12, 0)    # release: tonic
+
+    def test_the_untransformed_occurrence_is_unaffected(self):
+        piece = _make_piece(structure=[
+            "A",
+            MusicAnvil.StructureEntry(section="A", transformer=MusicAnvil.CADENCE_RELEASE),
+            "A",
+        ], bars=2)
+        midi = MusicAnvil.render_piece(piece, random.Random(3))
+        piano = [inst for inst in midi.instruments if inst.name == "Piano"][0]
+        section_len = MusicAnvil.section_seconds(2, 120, (4, 4))
+        first = [(round(n.start, 6), n.pitch) for n in piano.notes if n.start < section_len]
+        third = [(round(n.start - 2 * section_len, 6), n.pitch) for n in piano.notes
+                 if n.start >= 2 * section_len]
+        self.assertEqual(first, third)
+
+
+class TestAutomaticPhraseCadences(unittest.TestCase):
+    """ToDo 4.6 — every phrase should ask a question or answer it, without the user
+    attaching a transformer."""
+
+    def _render(self, bars=4, phrase_bars=2, auto=True, seed=5, scale="major", tonic="C"):
+        piece = _make_piece(bars=bars)
+        piece.scale, piece.tonic = scale, tonic
+        piece.auto_cadence = auto
+        piece.sections["A"].phrase_bars = phrase_bars
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def _phrase_final(self, section, instrument, phrase_index):
+        ctx = section.context
+        phrase = section.phrases[phrase_index]
+        window = [e for e in section.events[instrument]
+                  if phrase.start_beat * ctx.subs_per_beat <= e.start_sub
+                  < phrase.end_beat * ctx.subs_per_beat]
+        last = max(e.start_sub for e in window)
+        return [e for e in window if e.start_sub == last]
+
+    def test_the_antecedent_ends_open_and_the_consequent_closed(self):
+        section = self._render()
+        tonic_pc = section.context.scale_pitches[0] % 12
+        _, unstable = ma_utils.degree_stability("major")
+        first = self._phrase_final(section, "Piano", 0)[0]
+        last = self._phrase_final(section, "Piano", 1)[0]
+        self.assertIn((first.pitch - tonic_pc) % 12, unstable)
+        self.assertEqual(last.pitch % 12, tonic_pc)
+
+    def test_the_harmony_follows_the_endings(self):
+        section = self._render()
+        tonic_pc = section.context.scale_pitches[0] % 12
+        opening = {(e.pitch - tonic_pc) % 12 for e in self._phrase_final(section, "Guitar", 0)}
+        closing = {(e.pitch - tonic_pc) % 12 for e in self._phrase_final(section, "Guitar", 1)}
+        self.assertEqual(opening, set(ma_utils.diatonic_triad("major", 7)))
+        self.assertEqual(closing, {0, 4, 7})
+
+    def test_disabling_auto_cadence_leaves_the_material_alone(self):
+        shaped = self._render(auto=True)
+        plain = self._render(auto=False)
+        self.assertNotEqual([e.pitch for e in shaped.events["Piano"]],
+                            [e.pitch for e in plain.events["Piano"]])
+
+    def test_cadence_beats_widens_the_window(self):
+        """A wider window reshapes more of the approach — checked across seeds, since a
+        single-onset window has nothing extra to reshape."""
+        differences = 0
+        for seed in range(6):
+            plain = self._render(auto=False, seed=seed)
+
+            def shaped(beats):
+                return {(e.start_sub, e.pitch)
+                        for e in MusicAnvil.apply_phrase_cadences(
+                            plain.copy(), beats).events["Piano"]}
+
+            if shaped(1) != shaped(4):
+                differences += 1
+        self.assertGreater(differences, 0, "cadence_beats never changed the outcome")
+
+    def test_the_melody_stays_in_the_scale(self):
+        section = self._render(scale="natural_minor", tonic="A")
+        scale_pcs = {p % 12 for p in section.context.scale_pitches}
+        for event in section.events["Piano"]:
+            self.assertIn(event.pitch % 12, scale_pcs)
+
+    def test_notes_stay_inside_the_section(self):
+        piece = _make_piece(bars=4)
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        tracks, length = MusicAnvil.render_section(resolved, random.Random(5))
+        for notes in tracks.values():
+            for note in notes:
+                self.assertLessEqual(note.end, length + 1e-9)
+                self.assertGreaterEqual(note.start, -1e-9)
+
+    def test_a_single_phrase_section_still_closes(self):
+        section = self._render(bars=1, phrase_bars=1)
+        tonic_pc = section.context.scale_pitches[0] % 12
+        self.assertEqual(self._phrase_final(section, "Piano", 0)[0].pitch % 12, tonic_pc)
+
+    def test_shape_cadence_reports_what_it_touched(self):
+        section = self._render(auto=False)
+        ctx = section.context
+        touched = MusicAnvil.shape_cadence(section, 0, ctx.subs_per_bar, rising=True)
+        self.assertGreaterEqual(touched, 3)
+
+    def test_apply_phrase_cadences_without_phrases_is_a_no_op(self):
+        section = self._render(auto=False)
+        section.phrases = []
+        before = [(e.start_sub, e.pitch) for e in section.events["Piano"]]
+        MusicAnvil.apply_phrase_cadences(section)
+        self.assertEqual([(e.start_sub, e.pitch) for e in section.events["Piano"]], before)
+
+
+class TestHarmonicAcceleration(unittest.TestCase):
+    """ToDo 4.6 — a held chord is re-struck per beat in the bar that closes a phrase."""
+
+    def _ctx_and_phrases(self, bars=4, phrase_bars=2):
+        piece = _make_piece(bars=bars)
+        piece.sections["A"].phrase_bars = phrase_bars
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        ctx = MusicAnvil.make_render_context(resolved)
+        return ctx, MusicAnvil.plan_phrases(ctx, phrase_bars)
+
+    def _chord(self, start, length, pitches=(60, 64, 67)):
+        return [MusicAnvil.NoteEvent(start_sub=start, length_sub=length, pitch=p,
+                                     velocity=78, gate=0.85) for p in pitches]
+
+    def test_a_held_chord_in_the_closing_bar_is_split_per_beat(self):
+        ctx, phrases = self._ctx_and_phrases()
+        start = (phrases[0].end_beat - ctx.beats_per_bar) * ctx.subs_per_beat
+        events = self._chord(start, 4 * ctx.subs_per_beat)
+        accelerated = MusicAnvil.accelerate_harmony(events, ctx, phrases)
+        starts = sorted({e.start_sub for e in accelerated})
+        self.assertEqual(starts, [start + i * ctx.subs_per_beat for i in range(4)])
+        self.assertTrue(all(e.length_sub == ctx.subs_per_beat for e in accelerated))
+
+    def test_a_chord_outside_the_closing_bar_is_untouched(self):
+        ctx, phrases = self._ctx_and_phrases(bars=8, phrase_bars=4)
+        events = self._chord(0, 4 * ctx.subs_per_beat)
+        accelerated = MusicAnvil.accelerate_harmony(events, ctx, phrases)
+        self.assertEqual([(e.start_sub, e.length_sub) for e in accelerated],
+                         [(e.start_sub, e.length_sub) for e in events])
+
+    def test_a_one_beat_chord_is_untouched(self):
+        ctx, phrases = self._ctx_and_phrases()
+        start = (phrases[0].end_beat - 1) * ctx.subs_per_beat
+        events = self._chord(start, ctx.subs_per_beat)
+        self.assertEqual(len(MusicAnvil.accelerate_harmony(events, ctx, phrases)), 3)
+
+    def test_pitches_and_velocities_survive(self):
+        ctx, phrases = self._ctx_and_phrases()
+        start = (phrases[0].end_beat - ctx.beats_per_bar) * ctx.subs_per_beat
+        events = self._chord(start, 2 * ctx.subs_per_beat)
+        accelerated = MusicAnvil.accelerate_harmony(events, ctx, phrases)
+        self.assertEqual({e.pitch for e in accelerated}, {60, 64, 67})
+        self.assertTrue(all(e.velocity == 78 for e in accelerated))
+
+    def test_empty_input_is_safe(self):
+        ctx, phrases = self._ctx_and_phrases()
+        self.assertEqual(MusicAnvil.accelerate_harmony([], ctx, phrases), [])
+        self.assertEqual(MusicAnvil.accelerate_harmony(self._chord(0, 4), ctx, []),
+                         self._chord(0, 4))
+
+    def test_the_rendered_accompaniment_accelerates_into_the_cadence(self):
+        piece = _make_piece(bars=4)
+        piece.sections["A"].phrase_bars = 2
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        rendered = MusicAnvil._render_section_events(resolved, random.Random(5))
+        ctx = rendered.context
+        closing_bar = (rendered.phrases[0].end_beat - ctx.beats_per_bar) * ctx.subs_per_beat
+        closing = [e for e in rendered.events["Guitar"]
+                   if closing_bar <= e.start_sub < rendered.phrases[0].end_beat * ctx.subs_per_beat]
+        self.assertTrue(closing)
+        self.assertTrue(all(e.length_sub <= ctx.subs_per_beat for e in closing))
+
+
+class TestDrumFills(unittest.TestCase):
+    """ToDo 4.6 — the drums must mark the phrase structure, not repeat one bar forever."""
+
+    def _render(self, bars=4, phrase_bars=2, fills=True, seed=5, signature=(4, 4)):
+        piece = _make_piece(bars=bars)
+        piece.signature = signature
+        piece.drum_fills = fills
+        piece.sections["A"].phrase_bars = phrase_bars
+        resolved = MusicAnvil.resolve_section(piece.sections["A"], piece)
+        return MusicAnvil._render_section_events(resolved, random.Random(seed))
+
+    def test_a_fill_lands_in_the_last_beat_of_each_phrase(self):
+        section = self._render()
+        ctx = section.context
+        fill_pitches = {ma_utils.drum_pitches[name]
+                        for name in ma_utils.drum_fill["pitches"]}
+        for phrase in section.phrases:
+            start = (phrase.end_beat - 1) * ctx.beat_len
+            hits = [n for n in section.drums
+                    if start - 1e-9 <= n.start < phrase.end_beat * ctx.beat_len - 1e-9
+                    and n.pitch in fill_pitches]
+            self.assertTrue(hits, f"no fill at the end of phrase {phrase.index}")
+
+    def test_the_fill_subdivides_the_beat(self):
+        section = self._render()
+        ctx = section.context
+        phrase = section.phrases[0]
+        start = (phrase.end_beat - 1) * ctx.beat_len
+        step = ctx.beat_len / ma_utils.drum_fill["notes_per_beat"]
+        hits = sorted(n.start for n in section.drums
+                      if start - 1e-9 <= n.start < phrase.end_beat * ctx.beat_len - 1e-9)
+        self.assertTrue(any(abs(hit - (start + step)) < 1e-9 for hit in hits))
+
+    def test_a_crash_opens_every_phrase_after_the_first(self):
+        section = self._render()
+        ctx = section.context
+        crash = ma_utils.drum_pitches[ma_utils.drum_fill["crash"]]
+        for phrase in section.phrases[1:]:
+            start = phrase.start_beat * ctx.beat_len
+            self.assertTrue(any(n.pitch == crash and abs(n.start - start) < 1e-9
+                                for n in section.drums),
+                            f"no crash at phrase {phrase.index}")
+
+    def test_no_crash_before_the_first_phrase(self):
+        section = self._render()
+        crash = ma_utils.drum_pitches[ma_utils.drum_fill["crash"]]
+        rock_has_crash = any(entry[1] == crash for entry in ma_utils.drum_lines["Rock"])
+        if not rock_has_crash:
+            self.assertFalse(any(n.pitch == crash and n.start < 1e-9 for n in section.drums))
+
+    def test_fills_stay_inside_the_section(self):
+        for signature in ((4, 4), (3, 4), (6, 8)):
+            with self.subTest(signature=signature):
+                section = self._render(signature=signature)
+                for note in section.drums:
+                    self.assertLessEqual(note.end, section.length + 1e-9)
+                    self.assertGreaterEqual(note.start, -1e-9)
+
+    def test_the_kick_pattern_survives_the_fill(self):
+        section = self._render()
+        kick = ma_utils.drum_pitches["Bass Drum"]
+        self.assertTrue(any(n.pitch == kick for n in section.drums))
+
+    def test_disabling_fills_restores_the_plain_pattern(self):
+        with_fills = self._render(fills=True)
+        without = self._render(fills=False)
+        self.assertGreater(len(with_fills.drums), len(without.drums))
+
+    def test_add_drum_fills_without_phrases_is_a_no_op(self):
+        section = self._render(fills=False)
+        self.assertEqual(MusicAnvil.add_drum_fills(section.drums, section.context, []),
+                         section.drums)
+
+    def test_add_drum_fills_with_an_empty_spec_is_a_no_op(self):
+        section = self._render(fills=False)
+        self.assertEqual(
+            MusicAnvil.add_drum_fills(section.drums, section.context, section.phrases,
+                                      spec={}),
+            section.drums)
+
+
 class TestTempoInternalsGuard(unittest.TestCase):
     """ToDo 2.1 — _insert_midi_tempo_change reaches into private pretty_midi members.
 
@@ -860,11 +1933,12 @@ class TestDrumPatternFollowsSignature(unittest.TestCase):
     """ToDo 3.1 — the drum pattern must fill the bar of the section's signature instead
     of assuming a 4-quarter-note bar."""
 
-    def _drums(self, rhythm, signature, bars=2, tempo=120):
+    def _drums(self, rhythm, signature, bars=2, tempo=120, drum_fills=False):
         piece = MusicAnvil.PieceSpec(
             tempo=tempo,
             signature=signature,
             rhythm=rhythm,
+            drum_fills=drum_fills,   # this class tests the pattern itself, not the fills
             scale="major",
             tonic="C",
             roles={

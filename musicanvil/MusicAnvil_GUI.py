@@ -35,10 +35,25 @@ ARTIC_PARAMS = [
     ("bass_gate",            "Bass Gate (0–1):",       str(_PIECE_DEFAULTS["bass_gate"]),            False),
     ("chord_gate",           "Chord Gate (0–1):",      str(_PIECE_DEFAULTS["chord_gate"]),           False),
     ("chord_octave_shift",   "Chord Octave Shift:",    str(_PIECE_DEFAULTS["chord_octave_shift"]),   True),
+    # Phrasing and dynamics (ToDo 4.1-4.6)
+    ("phrase_bars",          "Phrase Bars (0=auto):",  str(_PIECE_DEFAULTS["phrase_bars"]),          True),
+    ("metric_accent",        "Metric Accent:",         str(_PIECE_DEFAULTS["metric_accent"]),        True),
+    ("intensity",            "Intensity (0–2):",       str(_PIECE_DEFAULTS["intensity"]),            False),
+    ("final_lengthening",    "Final Lengthening:",     str(_PIECE_DEFAULTS["final_lengthening"]),    False),
+    ("lead_syncopation",     "Lead Syncopation (0–1):", str(_PIECE_DEFAULTS["lead_syncopation"]),    False),
+    ("cadence_beats",        "Cadence Beats:",         str(_PIECE_DEFAULTS["cadence_beats"]),        True),
+]
+
+# Piece-level switches (checkboxes rather than entries).
+TOGGLE_PARAMS = [
+    ("auto_cadence", "Open/closed phrase endings", bool(_PIECE_DEFAULTS["auto_cadence"])),
+    ("drum_fills",   "Drum fills at phrase ends",  bool(_PIECE_DEFAULTS["drum_fills"])),
 ]
 
 
 def _entry_label(entry):
+    """'Verse', 'Verse [invert]', 'Verse [+5]', 'Verse [tension bars=1]' — built from the
+    transformer's declared parameters, so a new transformer needs no code here."""
     if isinstance(entry, str):
         return entry
     if entry.transformer is None:
@@ -46,7 +61,8 @@ def _entry_label(entry):
     if entry.transformer == "tone_shift":
         n = entry.transformer_kwargs.get("n", 0)
         return f"{entry.section} [{n:+d}]"
-    return f"{entry.section} [{entry.transformer}]"
+    shown = " ".join(f"{key}={value}" for key, value in entry.transformer_kwargs.items())
+    return f"{entry.section} [{entry.transformer}{' ' + shown if shown else ''}]"
 
 
 def fmt_mmss(seconds):
@@ -61,19 +77,25 @@ def fmt_mmss(seconds):
 # so a saved song can be reopened and edited exactly as it was.
 
 PROJECT_FORMAT = "musicanvil-project"
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 
 # Scalar (non-signature, non-roles) fields shared by PieceSpec and SectionSpec.
+# Version 2 added the phrasing/dynamics fields (ToDo 4.2-4.4). Older project files
+# simply lack those keys and fall back to the piece defaults when loaded.
+_MUSICAL_FIELDS = (
+    "phrase_bars", "metric_accent", "intensity", "final_lengthening", "lead_syncopation",
+    "auto_cadence", "cadence_beats", "drum_fills",
+)
 _SECTION_SCALAR_FIELDS = (
     "bars", "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",
     "drums_enabled", "lead_rest_prob", "lead_sustain", "lead_velocity_jitter",
     "lead_step_bias", "bass_gate", "chord_gate", "chord_octave_shift",
-)
+) + _MUSICAL_FIELDS
 _PIECE_SCALAR_FIELDS = (
     "tempo", "rhythm", "scale", "tonic", "tonic_octave", "beat_mode",
     "drums_enabled", "lead_rest_prob", "lead_sustain", "lead_velocity_jitter",
     "lead_step_bias", "bass_gate", "chord_gate", "chord_octave_shift",
-)
+) + _MUSICAL_FIELDS
 
 
 def _roles_to_dict(roles):
@@ -407,6 +429,8 @@ class MusicGeneratorApp:
 
             for key in self.artic_vars:
                 self.artic_vars[key].set(str(getattr(piece, key)))
+            for key in self.toggle_vars:
+                self.toggle_vars[key].set(bool(getattr(piece, key)))
 
             self.piece_drum_editor.set_rhythm(piece.rhythm)
             self.piece_drum_editor.set_drums_enabled(piece.drums_enabled)
@@ -495,6 +519,14 @@ class MusicGeneratorApp:
             tk.Entry(artic, textvariable=var, width=8).grid(row=r, column=1, sticky="w", padx=5, pady=3)
             self.artic_vars[key] = var
 
+        self.toggle_vars = {}
+        for offset, (key, label, default) in enumerate(TOGGLE_PARAMS):
+            var = tk.BooleanVar(value=default)
+            tk.Checkbutton(artic, text=label, variable=var, anchor="w").grid(
+                row=len(ARTIC_PARAMS) + offset, column=0, columnspan=2,
+                sticky="w", padx=5, pady=2)
+            self.toggle_vars[key] = var
+
         # ---- Default Roles (below, spanning both columns) ----
         roles_frame = tk.LabelFrame(self.piece_tab, text="Default Roles")
         roles_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="nw")
@@ -562,13 +594,21 @@ class MusicGeneratorApp:
         override_row(13, "chord_gate",           "Override Chord Gate",         None,  8)
         override_row(14, "chord_octave_shift",   "Override Chord Oct. Shift",   None,  4)
 
+        # Phrasing / dynamics overrides (ToDo 4.1-4.6)
+        override_row(15, "phrase_bars",       "Override Phrase Bars",     None,  4)
+        override_row(16, "metric_accent",     "Override Metric Accent",   None,  4)
+        override_row(17, "intensity",         "Override Intensity",       None,  6)
+        override_row(18, "final_lengthening", "Override Final Length.",   None,  6)
+        override_row(19, "lead_syncopation",  "Override Syncopation",     None,  6)
+        override_row(20, "cadence_beats",     "Override Cadence Beats",   None,  4)
+
         # Drums enabled override (listbox — separate from override_row)
         self._sec_drums_override_var = tk.BooleanVar(value=False)
         tk.Checkbutton(editor, text="Override Drums Enabled",
                        variable=self._sec_drums_override_var).grid(
-            row=15, column=0, sticky="w", padx=5, pady=2)
+            row=21, column=0, sticky="w", padx=5, pady=2)
         dlf, self._sec_drums_lb = _scrolled_listbox(editor, height=4, width=15, selectmode=tk.MULTIPLE)
-        dlf.grid(row=15, column=1, padx=5, pady=2, sticky="w")
+        dlf.grid(row=21, column=1, padx=5, pady=2, sticky="w")
         for name in DRUM_INSTRUMENTS:
             self._sec_drums_lb.insert(tk.END, name)
         self._sec_drums_lb.selection_set(0, tk.END)
@@ -615,12 +655,13 @@ class MusicGeneratorApp:
         self.transform_var = tk.StringVar(value=NONE_CHOICE)
         ttk.Combobox(transform_frame, textvariable=self.transform_var,
                      values=TRANSFORMER_OPTIONS, state="readonly", width=11).grid(row=0, column=1, padx=(3, 8))
-        tk.Label(transform_frame, text="Shift n:").grid(row=0, column=2, sticky="w")
-        self.shift_var = tk.StringVar(value="0")
-        self.shift_spinbox = tk.Spinbox(transform_frame, from_=-127, to=127,
-                                        textvariable=self.shift_var, width=4, state="disabled")
-        self.shift_spinbox.grid(row=0, column=3, padx=(3, 0))
+        # Parameter controls are built from ma_utils.transformer_params(), so every
+        # transformer brings its own widgets instead of the GUI hardcoding them.
+        self.transform_param_frame = tk.Frame(transform_frame)
+        self.transform_param_frame.grid(row=0, column=2, sticky="w")
+        self.transform_param_vars = {}
         self.transform_var.trace_add("write", self._on_transform_changed)
+        self._build_transformer_params()
 
         tk.Button(structure, text="Remove", command=self._remove_from_structure).grid(row=3, column=0, padx=5, pady=3)
         tk.Button(structure, text="Move Up", command=lambda: self._move_in_structure(-1)).grid(row=3, column=1, padx=5, pady=3)
@@ -631,9 +672,50 @@ class MusicGeneratorApp:
 
         tk.Button(structure, text="Generate", command=self._generate).grid(row=5, column=0, columnspan=3, pady=10)
 
+    def _build_transformer_params(self):
+        """Rebuild the parameter widgets for the selected transformer."""
+        for child in self.transform_param_frame.winfo_children():
+            child.destroy()
+        self.transform_param_vars = {}
+        name = self.transform_var.get()
+        if name not in ma_utils.BEAT_TRANSFORMERS:   # "(none)", or nothing chosen yet
+            return
+        for column, param in enumerate(ma_utils.transformer_params(name)):
+            label = param.get("label", param["name"])
+            tk.Label(self.transform_param_frame, text=f"{label}:").grid(
+                row=0, column=column * 2, sticky="w", padx=(6, 0))
+            var = tk.StringVar(value=str(param.get("default", "")))
+            self.transform_param_vars[param["name"]] = (var, param)
+            if param.get("type") == "choice":
+                ttk.Combobox(self.transform_param_frame, textvariable=var,
+                             values=list(param.get("choices") or []), state="readonly",
+                             width=10).grid(row=0, column=column * 2 + 1, padx=(3, 0))
+            else:
+                tk.Spinbox(self.transform_param_frame,
+                           from_=param.get("min", 0), to=param.get("max", 100),
+                           increment=1 if param.get("type") == "int" else 0.1,
+                           textvariable=var, width=5).grid(row=0, column=column * 2 + 1,
+                                                           padx=(3, 0))
+
+    def _transformer_kwargs(self):
+        """Read the parameter widgets into a kwargs dict, converting to the declared type."""
+        kwargs = {}
+        for name, (var, param) in self.transform_param_vars.items():
+            raw = var.get()
+            kind = param.get("type", "str")
+            try:
+                if kind == "int":
+                    kwargs[name] = int(float(raw))
+                elif kind == "float":
+                    kwargs[name] = float(raw)
+                else:
+                    kwargs[name] = raw
+            except (TypeError, ValueError):
+                raise ValueError(f"{param.get('label', name)} must be a number, got '{raw}'.")
+        return kwargs
+
     def _on_transform_changed(self, *_):
-        state = "normal" if self.transform_var.get() == "tone_shift" else "disabled"
-        self.shift_spinbox.config(state=state)
+        self._build_transformer_params()
 
     def _add_to_structure(self):
         name = self.add_section_var.get()
@@ -643,11 +725,11 @@ class MusicGeneratorApp:
         transformer = self.transform_var.get()
         transformer = None if transformer == NONE_CHOICE else transformer
         kwargs = {}
-        if transformer == "tone_shift":
+        if transformer is not None:
             try:
-                kwargs["n"] = int(self.shift_var.get())
-            except ValueError:
-                messagebox.showerror("Error", "Shift n must be a whole number.")
+                kwargs = self._transformer_kwargs()
+            except ValueError as exc:
+                messagebox.showerror("Error", str(exc))
                 return
         entry = MusicAnvil.StructureEntry(section=name, transformer=transformer, transformer_kwargs=kwargs)
         self.structure.append(entry)
@@ -875,6 +957,8 @@ class MusicGeneratorApp:
         for key, _label, _default, is_int in ARTIC_PARAMS:
             raw = self.artic_vars[key].get()
             result[key] = int(raw) if is_int else float(raw)
+        for key, _label, _default in TOGGLE_PARAMS:
+            result[key] = bool(self.toggle_vars[key].get())
         return result
 
     def _current_piece_spec(self, require_lead=True):

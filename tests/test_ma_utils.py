@@ -1110,5 +1110,292 @@ class TestSignatureOptions(unittest.TestCase):
         self.assertEqual(len(self.options), len(set(self.options)))
 
 
+class TestDegreeStability(unittest.TestCase):
+    """ToDo 4.1/4.0 — stable vs tendency degrees, the mechanism behind open and closed
+    phrase endings."""
+
+    def test_major_scale(self):
+        stable, unstable = ma_utils.degree_stability("major")
+        self.assertEqual(stable, [0, 4, 7])
+        self.assertEqual(unstable, [2, 5, 9, 11])
+
+    def test_natural_minor_has_a_minor_third(self):
+        stable, unstable = ma_utils.degree_stability("natural_minor")
+        self.assertEqual(stable, [0, 3, 7])
+        self.assertEqual(unstable, [2, 5, 8, 10])
+
+    def test_blues_scale(self):
+        stable, unstable = ma_utils.degree_stability("blues")
+        self.assertEqual(stable, [0, 3, 7])
+        self.assertEqual(unstable, [5, 6, 10])
+
+    def test_stable_and_unstable_cover_the_scale(self):
+        for name, intervals in ma_utils.scale_definitions.items():
+            with self.subTest(scale=name):
+                stable, unstable = ma_utils.degree_stability(name)
+                self.assertEqual(sorted(stable + unstable),
+                                 sorted({i % 12 for i in intervals}))
+
+    def test_unknown_scale_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.degree_stability("no_such_scale")
+
+    def test_leading_tone_is_the_preferred_tendency(self):
+        self.assertEqual(ma_utils.preferred_tendency_degree("major"), 11)
+        self.assertEqual(ma_utils.preferred_tendency_degree("harmonic_minor"), 11)
+
+    def test_a_scale_without_a_leading_tone_falls_back(self):
+        self.assertEqual(ma_utils.preferred_tendency_degree("pentatonic_major"), 2)
+        self.assertEqual(ma_utils.preferred_tendency_degree("natural_minor"), 2)
+
+    def test_preferred_tendency_is_always_unstable(self):
+        for name in ma_utils.scale_definitions:
+            with self.subTest(scale=name):
+                _, unstable = ma_utils.degree_stability(name)
+                offset = ma_utils.preferred_tendency_degree(name)
+                if unstable:
+                    self.assertIn(offset, unstable)
+                else:
+                    self.assertIsNone(offset)
+
+    def test_a_scale_with_no_tendency_tone_returns_none(self):
+        ma_utils.scale_definitions["unit_test_triad"] = [0, 4, 7]
+        try:
+            self.assertIsNone(ma_utils.preferred_tendency_degree("unit_test_triad"))
+        finally:
+            ma_utils.scale_definitions.pop("unit_test_triad", None)
+
+
+class TestDiatonicTriad(unittest.TestCase):
+    """ToDo 4.1 — the cadence chords: the tonic triad and the triad of the fifth."""
+
+    def test_tonic_triad_of_a_major_scale(self):
+        self.assertEqual(ma_utils.diatonic_triad("major", 0), [0, 4, 7])
+
+    def test_dominant_triad_of_a_major_scale(self):
+        self.assertEqual(ma_utils.diatonic_triad("major", 7), [7, 11, 2])
+
+    def test_supertonic_triad_is_minor(self):
+        self.assertEqual(ma_utils.diatonic_triad("major", 2), [2, 5, 9])
+
+    def test_minor_scale_tonic_triad(self):
+        self.assertEqual(ma_utils.diatonic_triad("natural_minor", 0), [0, 3, 7])
+
+    def test_leading_tone_triad_is_diminished(self):
+        self.assertEqual(ma_utils.diatonic_triad("major", 11), [11, 2, 5])
+
+    def test_a_degree_outside_the_scale_returns_none(self):
+        self.assertIsNone(ma_utils.diatonic_triad("major", 1))
+
+    def test_a_scale_that_cannot_spell_the_triad_returns_none(self):
+        self.assertIsNone(ma_utils.diatonic_triad("pentatonic_major", 2))
+
+    def test_every_triad_is_inside_its_scale(self):
+        for name, intervals in ma_utils.scale_definitions.items():
+            pcs = {i % 12 for i in intervals}
+            for offset in sorted(pcs):
+                triad = ma_utils.diatonic_triad(name, offset)
+                if triad is not None:
+                    with self.subTest(scale=name, offset=offset):
+                        self.assertTrue(set(triad) <= pcs)
+
+    def test_unknown_scale_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.diatonic_triad("no_such_scale", 0)
+
+
+class TestTransformerRegistry(unittest.TestCase):
+    """ToDo 4.5 — transformers declare their kind and their parameters."""
+
+    def tearDown(self):
+        ma_utils.BEAT_TRANSFORMERS.pop("unit_test_transformer", None)
+        ma_utils.TRANSFORMER_SPECS.pop("unit_test_transformer", None)
+
+    def test_builtin_transformers_are_note_transformers(self):
+        for name in ("tone_shift", "invert"):
+            with self.subTest(name=name):
+                self.assertEqual(ma_utils.transformer_kind(name), ma_utils.TRANSFORMER_NOTE)
+
+    def test_tone_shift_declares_its_parameter(self):
+        params = ma_utils.transformer_params("tone_shift")
+        self.assertEqual(len(params), 1)
+        self.assertEqual(params[0]["name"], "n")
+        self.assertEqual(params[0]["type"], "int")
+        self.assertIn("min", params[0])
+        self.assertIn("max", params[0])
+
+    def test_invert_has_no_parameters(self):
+        self.assertEqual(ma_utils.transformer_params("invert"), [])
+
+    def test_every_registered_transformer_has_a_spec(self):
+        for name in ma_utils.BEAT_TRANSFORMERS:
+            with self.subTest(name=name):
+                self.assertIn(name, ma_utils.TRANSFORMER_SPECS)
+                self.assertIn(ma_utils.transformer_kind(name),
+                              (ma_utils.TRANSFORMER_NOTE, ma_utils.TRANSFORMER_PHRASE))
+
+    def test_every_descriptor_is_well_formed(self):
+        for name in ma_utils.BEAT_TRANSFORMERS:
+            for param in ma_utils.transformer_params(name):
+                with self.subTest(name=name, param=param.get("name")):
+                    self.assertIn("name", param)
+                    self.assertIn("default", param)
+                    self.assertIn(param.get("type"), ("int", "float", "choice"))
+                    if param.get("type") == "choice":
+                        self.assertTrue(param.get("choices"))
+                    else:
+                        self.assertLessEqual(param["min"], param["max"])
+
+    def test_register_transformer_adds_kind_and_params(self):
+        params = [{"name": "x", "label": "X", "type": "float", "default": 0.5,
+                   "min": 0.0, "max": 1.0}]
+        ma_utils.register_transformer("unit_test_transformer", lambda beat, x=0.5: beat,
+                                      kind=ma_utils.TRANSFORMER_PHRASE, params=params)
+        self.assertIs(ma_utils.get_transformer("unit_test_transformer").__class__,
+                      (lambda: None).__class__)
+        self.assertEqual(ma_utils.transformer_kind("unit_test_transformer"),
+                         ma_utils.TRANSFORMER_PHRASE)
+        self.assertEqual(ma_utils.transformer_params("unit_test_transformer"), params)
+
+    def test_params_are_copies(self):
+        first = ma_utils.transformer_params("tone_shift")
+        first.append({"name": "bogus"})
+        self.assertEqual(len(ma_utils.transformer_params("tone_shift")), 1)
+
+    def test_unknown_transformer_kind_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.transformer_kind("no_such_transformer")
+
+    def test_unknown_transformer_params_raises(self):
+        with self.assertRaises(ValueError):
+            ma_utils.transformer_params("no_such_transformer")
+
+
+class TestMakeRhythmCell(unittest.TestCase):
+    """ToDo 4.2 — the motif a melody is built from, instead of i.i.d. random durations."""
+
+    def _cell(self, seed=1, subs_per_beat=4, beats=4, **kwargs):
+        return ma_utils.make_rhythm_cell(random.Random(seed), subs_per_beat, beats, **kwargs)
+
+    def test_cell_fills_exactly_the_requested_span(self):
+        for beats in (1, 2, 3, 4, 6):
+            with self.subTest(beats=beats):
+                cell = self._cell(beats=beats)
+                start, length = cell[-1]
+                self.assertEqual(start + length, beats * 4)
+
+    def test_onsets_are_contiguous_from_zero(self):
+        cell = self._cell()
+        self.assertEqual(cell[0][0], 0)
+        for (start, length), (next_start, _) in zip(cell, cell[1:]):
+            self.assertEqual(start + length, next_start)
+
+    def test_lengths_are_positive(self):
+        self.assertTrue(all(length >= 1 for _, length in self._cell()))
+
+    def test_max_length_is_respected(self):
+        cell = self._cell(max_length_sub=2)
+        self.assertTrue(all(length <= 2 for _, length in cell))
+
+    def test_long_notes_start_on_a_beat(self):
+        """A note of a beat or more may not start off the beat — that is what keeps the
+        rhythm metrical rather than drifting."""
+        for seed in range(12):
+            with self.subTest(seed=seed):
+                for start, length in self._cell(seed=seed, beats=4):
+                    if length >= 4:
+                        self.assertEqual(start % 4, 0)
+
+    def test_syncopation_displaces_onsets_off_the_beat(self):
+        straight = [start for seed in range(8)
+                    for start, _ in self._cell(seed=seed, syncopation=0.0)]
+        synced = [start for seed in range(8)
+                  for start, _ in self._cell(seed=seed, syncopation=1.0)]
+        off_straight = sum(1 for s in straight if s % 4)
+        off_synced = sum(1 for s in synced if s % 4)
+        self.assertGreater(off_synced, off_straight)
+
+    def test_same_seed_gives_the_same_cell(self):
+        self.assertEqual(self._cell(seed=7), self._cell(seed=7))
+
+    def test_different_seeds_can_differ(self):
+        cells = {tuple(self._cell(seed=seed)) for seed in range(8)}
+        self.assertGreater(len(cells), 1)
+
+    def test_custom_vocabulary_is_honoured(self):
+        spec = {"durations_in_beats": [1.0], "weights": [1]}
+        cell = self._cell(spec=spec, beats=4)
+        self.assertEqual([length for _, length in cell], [4, 4, 4, 4])
+
+    def test_short_values_dominate_the_default_vocabulary(self):
+        """Most notes should be shorter than a beat — long values are the exception."""
+        lengths = [length for seed in range(20) for _, length in self._cell(seed=seed)]
+        short = sum(1 for length in lengths if length < 4)
+        self.assertGreater(short, len(lengths) / 2)
+
+    def test_config_vocabulary_is_well_formed(self):
+        spec = ma_utils.rhythm_cell
+        self.assertEqual(len(spec["durations_in_beats"]), len(spec["weights"]))
+        self.assertTrue(all(d > 0 for d in spec["durations_in_beats"]))
+        self.assertTrue(all(w >= 0 for w in spec["weights"]))
+
+
+class TestMetricWeight(unittest.TestCase):
+    """ToDo 4.3 — the metric hierarchy that turns bar position into emphasis."""
+
+    def test_weights_are_ordered(self):
+        w = ma_utils.metric_accents
+        self.assertGreater(w["downbeat"], w["secondary"])
+        self.assertGreater(w["secondary"], w["beat"])
+        self.assertGreater(w["beat"], w["offbeat"])
+
+    def test_reference_weight_is_present(self):
+        self.assertIn("reference", ma_utils.metric_accents)
+
+    def test_four_four(self):
+        w = ma_utils.metric_accents
+        self.assertEqual(ma_utils.metric_weight(0, 4), w["downbeat"])
+        self.assertEqual(ma_utils.metric_weight(2, 4), w["secondary"])
+        self.assertEqual(ma_utils.metric_weight(1, 4), w["beat"])
+        self.assertEqual(ma_utils.metric_weight(3, 4), w["beat"])
+
+    def test_off_the_beat_is_weakest(self):
+        w = ma_utils.metric_accents
+        for position in (0.25, 0.5, 1.5, 2.75):
+            with self.subTest(position=position):
+                self.assertEqual(ma_utils.metric_weight(position, 4), w["offbeat"])
+
+    def test_three_four_has_no_secondary_beat(self):
+        w = ma_utils.metric_accents
+        self.assertEqual(ma_utils.metric_weight(0, 3), w["downbeat"])
+        self.assertEqual(ma_utils.metric_weight(1, 3), w["beat"])
+        self.assertEqual(ma_utils.metric_weight(2, 3), w["beat"])
+
+    def test_two_four_has_no_secondary_beat(self):
+        self.assertEqual(ma_utils.metric_weight(1, 2), ma_utils.metric_accents["beat"])
+
+    def test_compound_six_eight_accents_beat_four(self):
+        w = ma_utils.metric_accents
+        self.assertEqual(ma_utils.metric_weight(3, 6), w["secondary"])
+        self.assertEqual(ma_utils.metric_weight(1, 6), w["beat"])
+        self.assertEqual(ma_utils.metric_weight(4, 6), w["beat"])
+
+    def test_compound_twelve_eight_accents_every_third_beat(self):
+        w = ma_utils.metric_accents
+        for beat in (3, 6, 9):
+            with self.subTest(beat=beat):
+                self.assertEqual(ma_utils.metric_weight(beat, 12), w["secondary"])
+        self.assertEqual(ma_utils.metric_weight(5, 12), w["beat"])
+
+    def test_positions_past_the_bar_wrap(self):
+        self.assertEqual(ma_utils.metric_weight(4, 4), ma_utils.metric_accents["downbeat"])
+        self.assertEqual(ma_utils.metric_weight(9, 4), ma_utils.metric_accents["beat"])
+
+    def test_custom_weight_table_is_honoured(self):
+        table = {"downbeat": 2.0, "secondary": 1.5, "beat": 1.0, "offbeat": 0.1}
+        self.assertEqual(ma_utils.metric_weight(0, 4, table), 2.0)
+        self.assertEqual(ma_utils.metric_weight(0.5, 4, table), 0.1)
+
+
 if __name__ == "__main__":
     unittest.main()

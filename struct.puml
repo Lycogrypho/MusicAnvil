@@ -16,11 +16,11 @@ package "musicanvil" {
     +piece_to_project_dict(piece, filename)
     +project_dict_to_piece(data)
     +fmt_mmss(seconds)
-    __ presets read from config __
-    SIGNATURE_OPTIONS
-    OCTAVE_OPTIONS
-    BEAT_MODE_OPTIONS
-    DEFAULT_SECTION_NAMES
+    __ built from declared metadata __
+    ARTIC_PARAMS / TOGGLE_PARAMS
+    _build_transformer_params()  ' from ma_utils.transformer_params
+    _MUSICAL_FIELDS (project format v2)
+    SIGNATURE_OPTIONS / BEAT_MODE_OPTIONS
   }
 
   class "MusicAnvil" as Engine <<module>> {
@@ -29,22 +29,36 @@ package "musicanvil" {
     +beat_seconds(tempo, denominator)
     +section_seconds(bars, tempo, signature)
     +piece_seconds(piece)
-    .. resolution ..
+    .. resolution / planning ..
     +resolve_section(section, piece)
+    +make_render_context(resolved)
+    +plan_phrases(ctx, phrase_bars)
+    +make_cell(ctx, rng, syncopation)
     .. generation ..
-    +generate_lead_line(...)
-    +generate_bass_line(...)
-    +generate_chord_line(...)
-    +derive_support_line(...)
+    +generate_lead_line(...) / -_lead_events
+    +generate_bass_line(...) / -_bass_events
+    +generate_chord_line(...) / +sustain_chords
+    +derive_support_line(...) / -_support_events
+    .. shaping passes ..
+    +accelerate_harmony(events, ctx, phrases)
+    +apply_metric_accents / +apply_drum_accents
+    +apply_final_lengthening(events, ctx, phrases, factor)
+    +apply_phrase_cadences(section, beats)
+    +add_drum_fills(notes, ctx, phrases)
+    .. phrase transformers (registered) ..
+    +build_tension(section, bars)
+    +release_tension(section, bars)
+    +shape_cadence(section, start, end, rising)
     .. rendering ..
+    +materialise(events, ctx)
+    -_render_section_events(resolved, rng)
     +render_section(resolved, rng)
     +render_piece(piece, rng)
-    -_insert_midi_tempo_change(midi, time, bpm)
-    -_append_midi_time_signature(midi, signature, time)
-    -_tempo_internals_available(midi)
+    -_insert_midi_tempo_change / -_append_midi_time_signature
     __ constants __
     ROLES / ROLE_LEAD / ROLE_ACCOMPANIMENT / ROLE_BASS
     DRUM_TRACK / INSTRUMENT_PROGRAMS / VELOCITY_*
+    CADENCE_TENSION / CADENCE_RELEASE
   }
 
   class "ma_utils" as Utils <<module>> {
@@ -56,40 +70,46 @@ package "musicanvil" {
     +generate_chord_notes(note_name, chord_type)
     +find_compatible_chords(beat, chord_defs)
     +beat_sub_unit(tempo, beat_length, mode)
+    +make_rhythm_cell(rng, subs_per_beat, beats, ...)
+    +metric_weight(beat_in_bar, beats_per_bar)
+    +degree_stability(scale_name)
+    +preferred_tendency_degree(scale_name)
+    +diatonic_triad(scale_name, root_offset)
     +generate_random_beat(...)
     .. drums ..
     +adapt_drum_line(line, tempo, scaling, denominator)
     +fit_drum_line_to_bar(line, tempo, signature, ...)
     +pattern_beats(rhythm)
-    .. transformers ..
+    .. transformer registry ..
+    +BEAT_TRANSFORMERS / TRANSFORMER_SPECS
+    +register_transformer(name, fn, kind, params)
+    +get_transformer / +transformer_kind / +transformer_params
     +tone_shift(beat, n) / +invert(beat)
-    +get_transformer(name)
     .. midi io ..
-    +write_notes_to_midi(...)
-    +write_instruments_to_midi(...)
+    +write_notes_to_midi(...) / +write_instruments_to_midi(...)
     +print_midi_notes_detailed(path)
     __ preset data (from config) __
     notes_in_octave / scale_definitions / chord_definitions
-    drum_pitches / drum_lines / drum_pattern_beats
-    chord_palette_extensions / BEAT_MODES
+    drum_pitches / drum_lines / drum_pattern_beats / drum_fill
+    chord_palette_extensions / metric_accents / rhythm_cell / BEAT_MODES
   }
 
   class "MusicAnvil.json" as Config <<configuration>> {
     notes_in_octave / scale_definitions
     chord_definitions / chord_palette_extensions
-    drum_pitches / drum_lines / drum_pattern_beats
+    drum_pitches / drum_lines / drum_pattern_beats / drum_fill
+    rhythm_cell / metric_accents
     beat_modes / instrument_programs / velocities
     piece_defaults / gui
   }
 
   package "piece model (dataclasses)" as Model {
     class PieceSpec {
-      tempo : int
-      signature : (int, int)
-      rhythm / scale / tonic : str
-      tonic_octave : int
-      beat_mode : int
-      drums_enabled : list[str] | None
+      tempo / signature / rhythm / scale / tonic
+      tonic_octave / beat_mode
+      phrase_bars / cadence_beats
+      metric_accent / intensity / final_lengthening
+      lead_syncopation / auto_cadence / drum_fills
       lead_* / bass_gate / chord_* : articulation
       roles : dict[str, RoleAssignment]
       sections : dict[str, SectionSpec]
@@ -114,6 +134,39 @@ package "musicanvil" {
       every field filled in
     }
   }
+
+  package "musical time (ToDo 4.7)" as MusicalTime {
+    class RenderContext {
+      tempo / signature / beat_len
+      sub_unit / subs_per_beat / max_note_sub
+      bars / scale_pitches / scale / tonic
+      +seconds(sub) / +beat_of(sub) / +beat_in_bar(sub)
+    }
+    class Phrase {
+      index / start_beat / length_beats
+      function : antecedent | consequent
+      ending : open | closed
+    }
+    class RhythmCell {
+      onsets : [(start_sub, length_sub)]
+      length_sub : int
+      +fragmented() / +tile(total, continuation_from)
+    }
+    class NoteEvent {
+      start_sub / length_sub : int
+      pitch / velocity : int
+      gate : float
+      degree / phrase / metric_weight
+      is_phrase_final : bool
+    }
+    class RenderedSection {
+      name / context / phrases
+      events : dict[instrument, [NoteEvent]]
+      drums : [pretty_midi.Note]
+      roles : dict[instrument, ROLE_*]
+      +tracks() / +copy()
+    }
+  }
 }
 
 package "examples" {
@@ -124,6 +177,7 @@ package "examples" {
 
 package "tests" {
   class "test_composer.py" as TComposer <<tests>>
+  class "test_musical_time.py" as TTime <<tests>>
   class "test_ma_utils.py" as TUtils <<tests>>
   class "test_gui.py" as TGui <<tests>>
   class "test_dependencies.py" as TDeps <<tests>>
@@ -134,8 +188,8 @@ class "pretty_midi 0.2.11" as PM <<external>>
 
 ' --- layering ---
 GUI --> Engine : builds a PieceSpec,\ncalls render_piece()
-GUI --> Utils : dropdown data
-Engine --> Utils : scales, chords,\ndrum patterns, beat grid
+GUI --> Utils : dropdown data,\ntransformer descriptors
+Engine --> Utils : scales, chords, drum patterns,\nbeat grid, metric weights, cadences
 Utils ..> Config : load_config() (cached)
 Engine ..> Config : constants and\ndataclass defaults
 GUI ..> Config : gui presets
@@ -153,8 +207,24 @@ StructureEntry ..> SectionSpec : names one
 SectionSpec ..> ResolvedSection : resolve_section(section, piece)
 Engine ..> Model : owns
 
+' --- musical time ---
+ResolvedSection ..> RenderContext : make_render_context()
+RenderContext ..> Phrase : plan_phrases()
+RenderContext ..> RhythmCell : make_cell()
+RhythmCell ..> NoteEvent : tile() -> onsets
+RenderedSection "1" *-- "1" RenderContext
+RenderedSection "1" *-- "0..*" Phrase
+RenderedSection "1" *-- "0..*" NoteEvent
+Engine ..> MusicalTime : generates, shapes,\nthen materialises
+
+' --- transformers ---
+StructureEntry ..> Utils : names a transformer
+Utils ..> RenderedSection : phrase transformers\nreceive the section
+Engine ..> Utils : register_transformer(\n  tension / release)
+
 ' --- tests ---
 TComposer ..> Engine
+TTime ..> MusicalTime
 TUtils ..> Utils
 TGui ..> GUI
 TDeps ..> PM : pinned versions installed
@@ -162,18 +232,23 @@ TPack ..> Example
 TPack ..> Config : declared as package data
 
 note right of Engine
-  render_piece() renders each library
-  section once and reuses it at every
-  occurrence, emitting a tempo-change
-  and a time-signature event at each
+  Pipeline per section:
+    plan_phrases -> make_cell -> generate_* (NoteEvent)
+    -> accelerate_harmony -> metric accents
+    -> final lengthening -> phrase cadences
+    -> drum fills -> materialise
+  render_piece renders each library section once,
+  reuses it at every occurrence, and emits a
+  tempo-change and a time-signature event at each
   boundary where they change.
 end note
 
 note bottom of Utils
-  fit_drum_line_to_bar() repeats or cuts a
-  genre pattern (authored length declared in
-  drum_pattern_beats) so it spans exactly one
-  bar of the section's time signature.
+  fit_drum_line_to_bar() repeats or cuts a genre
+  pattern (length declared in drum_pattern_beats)
+  so it spans exactly one bar of the signature;
+  degree_stability()/diatonic_triad() supply the
+  open and closed endings the cadences aim at.
 end note
 
 @enduml

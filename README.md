@@ -60,6 +60,21 @@ surface without a commit.
 A PlantUML view of the same structure — modules, dataclasses and the call flow — is in
 [`struct.puml`](struct.puml).
 
+Inside the engine, music is generated in **musical time**: notes live on an integer grid
+of sub-beat units as `NoteEvent`s that carry their phrase, metric weight and scale degree,
+and are converted to seconds exactly once, at the end. That is what lets the shaping
+passes know where a note sits in the bar and which phrase it closes:
+
+```
+ResolvedSection
+  → plan_phrases()   → [Phrase]                     (antecedent / consequent)
+  → make_cell()      → RhythmCell                   (the section's motif)
+  → generate_*()     → [NoteEvent] on the grid
+  → shaping: harmonic acceleration → metric accents → phrase-final lengthening
+             → phrase cadences → drum fills
+  → materialise()    → {instrument: [pretty_midi.Note]}
+```
+
 All public symbols from both `MusicAnvil` and `ma_utils` are re-exported at the package level, so you can write either:
 
 ```python
@@ -71,9 +86,10 @@ from musicanvil import MusicAnvil, ma_utils               # module import
 
 All preset data and defaults live in a single external file, `musicanvil/MusicAnvil.json`, so they can be tweaked without touching code. It holds:
 
-- **Musical data** — `notes_in_octave`, `scale_definitions`, `chord_definitions`, `drum_pitches`, `drum_lines`, `drum_pattern_beats`, `beat_modes`
+- **Musical data** — `notes_in_octave`, `scale_definitions`, `chord_definitions`, `drum_pitches`, `drum_lines`, `drum_pattern_beats`, `drum_fill`, `beat_modes`
+- **Phrasing and dynamics** — `rhythm_cell` (the note-length vocabulary a motif is drawn from) and `metric_accents` (how much emphasis each position in the bar carries)
 - **Instrument mapping** — `instrument_programs` (name → General MIDI program) and `velocities` (lead / bass / chord / support)
-- **`piece_defaults`** — the default values for every `PieceSpec` / `SectionSpec` field (tempo, signature, scale, tonic, the six articulation parameters, section bars, …)
+- **`piece_defaults`** — the default values for every `PieceSpec` / `SectionSpec` field (tempo, signature, scale, tonic, the articulation, phrasing and dynamics parameters, section bars, …)
 - **`gui`** — dropdown option lists, default section names, default role assignments, and the default output filename
 
 `ma_utils` reads and caches the file at import time; the module-level dicts in `ma_utils` and the constants and dataclass defaults in `MusicAnvil` are all populated from it. To add a scale, a drum genre, or change a default, edit the JSON — no code change is needed.
@@ -129,7 +145,7 @@ Configures piece-wide defaults, split across two panels.
 
 **Articulation Defaults**
 
-Fine-tune how notes are shaped in the generated output. All six parameters can also be overridden per section in the Sections tab.
+Fine-tune how notes are shaped in the generated output. Every parameter here — and the phrasing and dynamics fields below it — can also be overridden per section in the Sections tab.
 
 | Field | Default | Effect |
 |---|---|---|
@@ -295,9 +311,51 @@ Both the engine's melody generator and `generate_random_beat` take their grid fr
 single helper, `ma_utils.beat_sub_unit(tempo, beat_length, mode)`, which returns
 `(sub_unit_seconds, max_multiplier)` — so the two can never drift apart.
 
+### Phrasing, dynamics and cadences
+
+A section is divided into **phrases** (`phrase_bars`, 0 = derive from the section length:
+half the section, capped at four bars). Phrases alternate *antecedent* (open) and
+*consequent* (closed), and the engine shapes them:
+
+| Field | Default | What it does |
+|---|---|---|
+| `phrase_bars` | 0 (auto) | Phrase length in bars |
+| `lead_syncopation` | 0.25 | Chance of an off-beat displacement in the melodic motif |
+| `metric_accent` | 12 | How much louder the downbeat is than a plain beat (0 = off) |
+| `intensity` | 1.0 | Velocity multiplier for the whole section (Intro < Verse < Chorus) |
+| `final_lengthening` | 1.5 | How much the last note of a phrase is stretched (1.0 = off) |
+| `auto_cadence` | true | Give each phrase an open or closed ending |
+| `cadence_beats` | 1 | How many beats at a phrase end are reshaped |
+| `drum_fills` | true | Fill into each phrase boundary, crash on the landing |
+
+What each pass does:
+
+- **Rhythmic motif** — instead of drawing every note length independently (which is
+  varied on paper and shapeless in the ear), each section states a one-bar cell built from
+  the weighted `rhythm_cell` vocabulary, repeats it, and then plays its *fragmented* form
+  — the first half stated twice — through the second half of the section. A note of a beat
+  or more starts on a beat, unless syncopation ties it across one.
+- **Metric accents** — velocity follows the metre: downbeat strongest, then the secondary
+  strong beat (middle of the bar in simple metres of four or more, every third beat in
+  compound metres such as 6/8), then plain beats, then off-beat positions.
+  `lead_velocity_jitter` stays on top as humanisation.
+- **Phrase-final lengthening** — the last note of each phrase is stretched and allowed to
+  ring to its full length instead of being clipped for a note that never comes.
+- **Cadences** — an antecedent phrase is left open (the melody rises to the strongest
+  tendency tone of the scale — the leading tone in major — over the triad of the fifth,
+  with the bass on its root and a velocity swell); a consequent closes on the tonic, with
+  a descending line, the tonic triad and a taper. Chords held across several beats are
+  re-struck once per beat in the bar that closes a phrase.
+- **Drums** — a tom/snare fill plays through the last beat of each phrase and a crash
+  opens the next one.
+
+The accompaniment also holds a chord for as long as the melody stays inside it, instead of
+re-striking it on every beat, and the bass lands on the strong beats while holding some
+notes across two.
+
 ### Articulation parameters
 
-All six articulation parameters can be set on `PieceSpec` (piece-wide) and overridden individually on any `SectionSpec`:
+Every articulation parameter can be set on `PieceSpec` (piece-wide) and overridden individually on any `SectionSpec`:
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
@@ -435,6 +493,41 @@ bar = ma_utils.fit_drum_line_to_bar(
 )   # a 4-beat pattern repeated to cover all six eighths of the bar
 ```
 
+### Phrase transformers: `tension` and `release`
+
+The transformers above rewrite pitches note by note. A **phrase transformer** instead
+receives the whole rendered section in musical time — its phrases, its per-role events and
+its drum track — so it can shape a cadence across every instrument at once. Two are built
+in, and they are what "build tension here, release it there" means in practice:
+
+```python
+piece.structure = [
+    "Verse",
+    MusicAnvil.StructureEntry(section="Verse", transformer="tension"),   # leave it hanging
+    MusicAnvil.StructureEntry(section="Chorus", transformer="release",   # and resolve
+                              transformer_kwargs={"bars": 2}),
+]
+```
+
+`tension` ends the passage on an unstable degree above the line, over the triad of the
+fifth, with the bass on its root and velocities swelling; `release` descends to the tonic
+over the tonic triad with a taper. Both hold the closing note. `bars` (default 1) sets how
+much of the ending is reshaped. Because the approach notes are re-ordered rather than
+invented, the result can never leave the scale.
+
+Every transformer declares its kind and its parameters in `ma_utils.TRANSFORMER_SPECS`, so
+the GUI builds the right controls for it automatically:
+
+```python
+ma_utils.transformer_kind("release")     # "phrase"
+ma_utils.transformer_params("tone_shift")  # [{"name": "n", "type": "int", ...}]
+
+ma_utils.register_transformer("my_ending", my_fn,
+                              kind=ma_utils.TRANSFORMER_PHRASE,
+                              params=[{"name": "bars", "label": "Bars", "type": "int",
+                                       "default": 1, "min": 1, "max": 8}])
+```
+
 ### Beat Transformers
 
 Transformers are functions that shift the pitches of a list of `pretty_midi.Note` objects:
@@ -520,13 +613,13 @@ Notes use sharps only (`C#`, not `Db`). Percussion always uses MIDI channel 10.
 
 ## Tests
 
-Run the test suite (290 tests):
+Run the test suite (503 tests):
 
 ```
 .venv\Scripts\python -m pytest tests/ -v
 ```
 
-Tests cover the composition engine (`test_composer.py`), utility library (`test_ma_utils.py`), GUI imports and structure operations (`test_gui.py`), the pinned environment (`test_dependencies.py`), and the repository layout and packaging metadata (`test_packaging.py`). The same suite plus `pip-audit` runs in CI on every push and pull request.
+Tests cover the composition engine (`test_composer.py`), the musical-time layer (`test_musical_time.py`), the utility library (`test_ma_utils.py`), GUI imports, structure operations and project files (`test_gui.py`), the pinned environment (`test_dependencies.py`), and the repository layout and packaging metadata (`test_packaging.py`). The same suite plus `pip-audit` runs in CI on every push and pull request.
 
 ---
 

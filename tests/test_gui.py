@@ -354,5 +354,175 @@ class TestGenerateSaveDialog(unittest.TestCase):
         self.assertEqual(kwargs.get("initialfile"), "my_song.mid")
 
 
+class TestTransformerParameterWidgets(unittest.TestCase):
+    """ToDo 4.5 — the GUI builds transformer controls from the declared descriptors."""
+
+    def _app(self):
+        gui_mod = _fresh_gui_module()
+        return gui_mod, gui_mod.MusicGeneratorApp(MagicMock())
+
+    def test_selecting_a_transformer_builds_its_parameter_vars(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.transform_var.get = lambda: "tone_shift"
+            app._build_transformer_params()
+            self.assertEqual(list(app.transform_param_vars), ["n"])
+
+    def test_a_parameterless_transformer_builds_nothing(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.transform_var.get = lambda: "invert"
+            app._build_transformer_params()
+            self.assertEqual(app.transform_param_vars, {})
+
+    def test_none_choice_builds_nothing(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.transform_var.get = lambda: gui_mod.NONE_CHOICE
+            app._build_transformer_params()
+            self.assertEqual(app.transform_param_vars, {})
+
+    def test_kwargs_are_converted_to_the_declared_type(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.transform_param_vars = {
+                "n": (MagicMock(get=lambda: "5"), {"name": "n", "type": "int"}),
+                "amount": (MagicMock(get=lambda: "0.25"),
+                           {"name": "amount", "type": "float"}),
+            }
+            self.assertEqual(app._transformer_kwargs(), {"n": 5, "amount": 0.25})
+
+    def test_a_non_numeric_value_is_reported(self):
+        with _patched_tk():
+            gui_mod, app = self._app()
+            app.transform_param_vars = {
+                "n": (MagicMock(get=lambda: "abc"),
+                      {"name": "n", "label": "Shift n", "type": "int"}),
+            }
+            with self.assertRaises(ValueError) as ctx:
+                app._transformer_kwargs()
+            self.assertIn("Shift n", str(ctx.exception))
+
+    def test_entry_label_shows_declared_parameters(self):
+        from musicanvil import MusicAnvil as MA
+        with _patched_tk():
+            gui_mod, _ = self._app()
+            entry = MA.StructureEntry(section="Verse", transformer="invert")
+            self.assertEqual(gui_mod._entry_label(entry), "Verse [invert]")
+            entry = MA.StructureEntry(section="Verse", transformer="tone_shift",
+                                      transformer_kwargs={"n": 5})
+            self.assertEqual(gui_mod._entry_label(entry), "Verse [+5]")
+            entry = MA.StructureEntry(section="Verse", transformer="other",
+                                      transformer_kwargs={"amount": 0.5})
+            self.assertEqual(gui_mod._entry_label(entry), "Verse [other amount=0.5]")
+
+
+class TestProjectFormatVersionTwo(unittest.TestCase):
+    """ToDo 4.5 — the phrasing/dynamics fields travel in the project file, and older
+    files still load."""
+
+    FIELDS = ("phrase_bars", "metric_accent", "intensity", "final_lengthening",
+              "lead_syncopation")
+
+    def _piece(self):
+        from musicanvil import MusicAnvil as MA
+        return MA.PieceSpec(
+            tempo=120, signature=(4, 4), rhythm="Rock", scale="major", tonic="C",
+            roles={MA.ROLE_LEAD: MA.RoleAssignment(main="Piano")},
+            sections={"Verse": MA.SectionSpec(name="Verse", bars=4)},
+            structure=["Verse"])
+
+    def test_version_is_two(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            self.assertEqual(gui_mod.PROJECT_VERSION, 2)
+
+    def test_new_fields_are_saved(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            data = gui_mod.piece_to_project_dict(self._piece())
+            for field in self.FIELDS:
+                with self.subTest(field=field):
+                    self.assertIn(field, data["piece"])
+                    self.assertIn(field, data["sections"][0])
+
+    def test_new_fields_round_trip(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            piece = self._piece()
+            piece.phrase_bars = 2
+            piece.intensity = 0.8
+            piece.sections["Verse"].final_lengthening = 2.5
+            piece.sections["Verse"].lead_syncopation = 0.9
+            restored, _ = gui_mod.project_dict_to_piece(gui_mod.piece_to_project_dict(piece))
+            self.assertEqual(restored.phrase_bars, 2)
+            self.assertEqual(restored.intensity, 0.8)
+            self.assertEqual(restored.sections["Verse"].final_lengthening, 2.5)
+            self.assertEqual(restored.sections["Verse"].lead_syncopation, 0.9)
+
+    def test_a_version_one_file_still_loads(self):
+        """Old projects have none of the new keys; they must fall back to the defaults."""
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            data = gui_mod.piece_to_project_dict(self._piece())
+            data["version"] = 1
+            for field in self.FIELDS:
+                data["piece"].pop(field, None)
+                data["sections"][0].pop(field, None)
+            from musicanvil import MusicAnvil as MA
+            restored, _ = gui_mod.project_dict_to_piece(data)
+            defaults = MA.PieceSpec()
+            for field in self.FIELDS:
+                with self.subTest(field=field):
+                    self.assertEqual(getattr(restored, field), getattr(defaults, field))
+                    self.assertIsNone(getattr(restored.sections["Verse"], field))
+
+
+class TestMusicalFieldsInTheForm(unittest.TestCase):
+    """The P4 fields must be editable in the GUI, not just in the config."""
+
+    def test_every_musical_field_is_offered(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            keys = {key for key, *_ in gui_mod.ARTIC_PARAMS}
+            keys |= {key for key, *_ in gui_mod.TOGGLE_PARAMS}
+            for field in gui_mod._MUSICAL_FIELDS:
+                with self.subTest(field=field):
+                    self.assertIn(field, keys)
+
+    def test_toggles_are_booleans_of_the_config_defaults(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            from musicanvil import ma_utils
+            for key, _label, default in gui_mod.TOGGLE_PARAMS:
+                with self.subTest(key=key):
+                    self.assertIsInstance(default, bool)
+                    self.assertEqual(default,
+                                     bool(ma_utils.get_param("piece_defaults", key)))
+
+    def test_every_articulation_key_has_a_section_override_row(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            for key, *_ in gui_mod.ARTIC_PARAMS:
+                with self.subTest(key=key):
+                    self.assertIn(key, app.sec_override)
+
+    def test_parse_artic_covers_every_piece_field(self):
+        with _patched_tk():
+            gui_mod = _fresh_gui_module()
+            app = gui_mod.MusicGeneratorApp(MagicMock())
+            for key, _label, default, is_int in gui_mod.ARTIC_PARAMS:
+                app.artic_vars[key] = MagicMock(get=lambda default=default: default)
+            for key, _label, default in gui_mod.TOGGLE_PARAMS:
+                app.toggle_vars[key] = MagicMock(get=lambda default=default: default)
+            parsed = app._parse_artic()
+            from musicanvil import MusicAnvil as MA
+            defaults = MA.PieceSpec()
+            for key, value in parsed.items():
+                with self.subTest(key=key):
+                    self.assertEqual(value, getattr(defaults, key))
+
+
 if __name__ == "__main__":
     unittest.main()

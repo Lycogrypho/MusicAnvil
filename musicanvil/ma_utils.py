@@ -176,9 +176,173 @@ drum_lines = _CONFIG["drum_lines"]
 DEFAULT_PATTERN_BEATS = 4
 drum_pattern_beats = _CONFIG.get("drum_pattern_beats", {})
 
+# Vocabulary a rhythmic cell is built from: candidate note lengths in beats and their
+# relative likelihood (short values dominate, long ones are the exception), plus the
+# default cell length in bars. See make_rhythm_cell.
+rhythm_cell = _CONFIG.get("rhythm_cell", {
+    "durations_in_beats": [0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
+    "weights": [18, 34, 6, 26, 6, 10],
+    "cell_bars": 1,
+})
+
+# The fill a drummer plays into the next phrase: which drums, how loud, how many hits per
+# beat, and the crash that marks the landing. See MusicAnvil.add_drum_fills.
+drum_fill = _CONFIG.get("drum_fill", {})
+
+# Relative emphasis of a position within the bar, used to turn metre into dynamics.
+# "reference" is the weight that leaves a velocity untouched (see the engine's
+# accent_delta); positions above it are accented, below it softened.
+metric_accents = _CONFIG.get("metric_accents", {
+    "downbeat": 1.0, "secondary": 0.85, "beat": 0.7, "offbeat": 0.5, "reference": 0.7,
+})
+
 # Scale name -> list of [root_offset_from_tonic, chord_type] pairs that are allowed even when
 # not strictly diatonic. The engine applies these extensions alongside the normal scale filter.
 chord_palette_extensions = _CONFIG["chord_palette_extensions"]
+
+
+def make_rhythm_cell(rng, subs_per_beat: int, beats: int, max_length_sub: Optional[int] = None,
+                     syncopation: float = 0.0, spec: Optional[dict] = None) -> list:
+    """Build one rhythmic cell — the motif a section's melody is made of.
+
+    Drawing every note length independently produces mathematically varied but
+    rhythmically shapeless music; real melodies state a short cell and then repeat and
+    vary it. This returns the cell as ``[(start_sub, length_sub), ...]`` filling exactly
+    ``beats`` beats of the caller's grid, with lengths drawn from the weighted
+    ``rhythm_cell`` vocabulary rather than uniformly.
+
+    Two rules keep the result metrical rather than random:
+    - a note of a beat or longer normally may only start on a beat, so long values land
+      on strong positions instead of drifting;
+    - ``syncopation`` (0-1) is the chance that a note starting on a beat is cut to half a
+      beat, displacing the next onset off the beat — and, off the beat, the chance that a
+      long value is kept and tied across the beat rather than shortened to it.
+
+    Parameters:
+    - rng: a ``random.Random`` — all randomness goes through it, so runs are reproducible.
+    - subs_per_beat: grid steps per beat.
+    - beats: cell length in beats.
+    - max_length_sub: cap on a single note, in grid steps (the generator's longest note).
+    - syncopation: probability of an off-beat displacement, per on-beat onset.
+    - spec: override for the ``rhythm_cell`` configuration.
+    """
+    table = rhythm_cell if spec is None else spec
+    durations = table.get("durations_in_beats") or [0.5, 1.0]
+    weights = table.get("weights") or [1] * len(durations)
+    weights = list(weights)[: len(durations)] or [1] * len(durations)
+
+    total = max(1, int(round(beats * subs_per_beat)))
+    cap = total if not max_length_sub else max(1, int(max_length_sub))
+    choices = [max(1, int(round(d * subs_per_beat))) for d in durations]
+
+    onsets = []
+    pos = 0
+    while pos < total:
+        length = rng.choices(choices, weights=weights, k=1)[0]
+        offset_in_beat = pos % subs_per_beat
+        if length >= subs_per_beat and offset_in_beat:
+            # Off the beat: normally shorten so the next onset lands on it; with
+            # `syncopation`, keep the long value and tie across the beat instead.
+            if not (syncopation and rng.random() < syncopation):
+                length = subs_per_beat - offset_in_beat
+        elif (syncopation and subs_per_beat > 1 and offset_in_beat == 0
+              and rng.random() < syncopation):
+            length = max(1, subs_per_beat // 2)            # displace the next onset
+        length = max(1, min(length, cap, total - pos))
+        onsets.append((pos, length))
+        pos += length
+    return onsets
+
+
+# Preference order for an unstable ending: the leading tone pulls hardest towards the
+# tonic, then the supertonic, then the subdominant (see ToDo 4.0).
+TENDENCY_PREFERENCE = (11, 2, 5, 9, 6, 1, 10, 8, 3)
+
+
+def degree_stability(scale_name: str):
+    """Split a scale into stable and unstable degrees, as semitone offsets from the tonic.
+
+    The tonic-triad degrees (1, 3, 5 — offsets 0, 3/4 and 7) are the stable ones a phrase
+    can come to rest on; everything else is a tendency tone that pulls towards a
+    neighbour and leaves the phrase sounding open. This is the mechanism behind the
+    "question / answer" pairing of phrases, and it is a property of *which* degree, not
+    of how high the note is.
+
+    Returns ``(stable, unstable)``, both sorted lists of semitone offsets.
+    """
+    intervals = scale_definitions.get(scale_name.lower())
+    if intervals is None:
+        raise ValueError(f"Scale '{scale_name}' is not defined.")
+    offsets = sorted({interval % 12 for interval in intervals})
+    stable = [offset for offset in offsets if offset in (0, 3, 4, 7)]
+    unstable = [offset for offset in offsets if offset not in stable]
+    return stable, unstable
+
+
+def preferred_tendency_degree(scale_name: str):
+    """The strongest tendency tone of a scale, or None if it has none.
+
+    Ordered by pull towards the tonic (``TENDENCY_PREFERENCE``): the leading tone first,
+    then the supertonic, and so on.
+    """
+    _, unstable = degree_stability(scale_name)
+    if not unstable:
+        return None
+    for offset in TENDENCY_PREFERENCE:
+        if offset in unstable:
+            return offset
+    return unstable[0]
+
+
+def diatonic_triad(scale_name: str, root_offset: int):
+    """Pitch classes (relative to the tonic) of the scale's triad on ``root_offset``.
+
+    Used to build a cadence chord — the tonic triad for a closed ending, the triad on the
+    fifth for an open one. Returns None when the scale cannot spell a triad there.
+    """
+    intervals = scale_definitions.get(scale_name.lower())
+    if intervals is None:
+        raise ValueError(f"Scale '{scale_name}' is not defined.")
+    pcs = {interval % 12 for interval in intervals}
+    root = root_offset % 12
+    if root not in pcs:
+        return None
+    third = next((step for step in (4, 3) if (root + step) % 12 in pcs), None)
+    fifth = next((step for step in (7, 6, 8) if (root + step) % 12 in pcs), None)
+    if third is None or fifth is None:
+        return None
+    return [root, (root + third) % 12, (root + fifth) % 12]
+
+
+def metric_weight(beat_in_bar: float, beats_per_bar: int, weights: Optional[dict] = None) -> float:
+    """Return the metric emphasis of a position in the bar, from ``metric_accents``.
+
+    Metre is a hierarchy, not a flat pulse: the downbeat carries the most weight, a
+    secondary strong beat comes next, plain beats follow and anything between beats is
+    weakest. The secondary beat is the middle of the bar in simple metres of four or
+    more (beat 3 of 4/4) and every third beat in compound metres (beats 4 and 7 of
+    12/8); triple and duple metres have none.
+
+    Parameters:
+    - beat_in_bar: position within the bar, in beats (0 = downbeat). Fractional values
+      are off-beat positions.
+    - beats_per_bar: the time signature's numerator.
+    - weights: override for the ``metric_accents`` table.
+    """
+    table = metric_accents if weights is None else weights
+    beat = round(beat_in_bar)
+    if abs(beat_in_bar - beat) > 1e-6:
+        return table.get("offbeat", 0.5)
+    beat %= max(1, beats_per_bar)
+    if beat == 0:
+        return table.get("downbeat", 1.0)
+    if beats_per_bar > 3 and beats_per_bar % 3 == 0:      # compound: 6/8, 9/8, 12/8
+        if beat % 3 == 0:
+            return table.get("secondary", 0.85)
+    elif beats_per_bar >= 4 and beats_per_bar % 2 == 0:   # simple duple/quadruple
+        if beat == beats_per_bar // 2:
+            return table.get("secondary", 0.85)
+    return table.get("beat", 0.7)
 
 
 def generate_scale(scale_name: str, tonic: str, start_octave: int = 4,
@@ -387,6 +551,15 @@ def invert(beat):
     return result
 
 
+# Transformer kinds. A *note* transformer is the original shape — ``fn(beat, **kwargs)``
+# over one instrument's notes, with no idea of metre, scale or phrase. A *phrase*
+# transformer is handed the whole rendered section in musical time —
+# ``fn(rendered_section, **kwargs)`` — so it can shape a cadence across every role at
+# once. The engine registers its phrase transformers here at import time, so the GUI
+# still has a single registry to read.
+TRANSFORMER_NOTE = "note"
+TRANSFORMER_PHRASE = "phrase"
+
 # Registry of all available beat transformers: name -> callable.
 # Zero-parameter transformers have signature (beat,).
 # Parameterised transformers have signature (beat, <extra args>).
@@ -395,6 +568,27 @@ BEAT_TRANSFORMERS = {
     "tone_shift": tone_shift,
     "invert": invert,
 }
+
+# name -> {"kind": ..., "params": [descriptor, ...]}. A descriptor declares one keyword
+# argument the GUI must offer: {"name", "label", "type" ("int"/"float"/"choice"),
+# "default", and "min"/"max" or "choices"}. Declaring them here rather than hardcoding
+# widgets means a new transformer appears in the GUI complete with its controls.
+TRANSFORMER_SPECS = {
+    "tone_shift": {
+        "kind": TRANSFORMER_NOTE,
+        "params": [{"name": "n", "label": "Shift n", "type": "int",
+                    "default": 0, "min": -127, "max": 127}],
+    },
+    "invert": {"kind": TRANSFORMER_NOTE, "params": []},
+}
+
+
+def register_transformer(name, fn, kind=TRANSFORMER_NOTE, params=None):
+    """Add a transformer to the registry, with its kind and parameter descriptors."""
+    BEAT_TRANSFORMERS[name] = fn
+    TRANSFORMER_SPECS[name] = {"kind": kind, "params": list(params or [])}
+    return fn
+
 
 ## End of Beat Transformers Section
 
@@ -408,6 +602,18 @@ def get_transformer(name):
         available = ", ".join(sorted(BEAT_TRANSFORMERS))
         raise ValueError(f"Unknown transformer '{name}'. Available: {available}")
     return fn
+
+
+def transformer_kind(name):
+    """``TRANSFORMER_NOTE`` or ``TRANSFORMER_PHRASE`` for a registered transformer."""
+    get_transformer(name)
+    return TRANSFORMER_SPECS.get(name, {}).get("kind", TRANSFORMER_NOTE)
+
+
+def transformer_params(name):
+    """The parameter descriptors of a registered transformer (possibly empty)."""
+    get_transformer(name)
+    return list(TRANSFORMER_SPECS.get(name, {}).get("params", []))
 
 
 def adapt_drum_line(drum_line: list, tempo: float, velocity_scaling_factor: float = 1.0,
