@@ -1,0 +1,560 @@
+{
+  "format": "musicanvil-project",
+  "version": 3,
+  "filename": "Test17",
+  "piece": {
+    "tempo": 120,
+    "rhythm": "Rock",
+    "scale": "blues",
+    "tonic": "C",
+    "tonic_octave": 3,
+    "beat_mode": 1,
+    "drums_enabled": null,
+    "lead_rest_prob": 0.08,
+    "lead_sustain": 0.95,
+    "lead_velocity_jitter": 12,
+    "lead_step_bias": 0.7,
+    "bass_gate": 0.9,
+    "chord_gate": 0.85,
+    "chord_octave_shift": -2,
+    "phrase_bars": 0,
+    "metric_accent": 12,
+    "intensity": 1.0,
+    "final_lengthening": 1.5,
+    "lead_syncopation": 0.25,
+    "auto_cadence": true,
+    "cadence_beats": 1,
+    "drum_fills": true,
+    "expression": true,
+    "signature": [
+      5,
+      4
+    ],
+    "roles": {
+      "Lead": {
+        "main": "Electric Guitar",
+        "supports": [
+          "Overdriven Guitar"
+        ]
+      },
+      "Accompaniment": {
+        "main": "Distortion Guitar",
+        "supports": []
+      },
+      "Bass": {
+        "main": "Electric Bass",
+        "supports": []
+      }
+    }
+  },
+  "sections": [
+    {
+      "name": "Intro",
+      "bars": 2,
+      "tempo": null,
+      "rhythm": null,
+      "scale": null,
+      "tonic": null,
+      "tonic_octave": null,
+      "beat_mode": null,
+      "drums_enabled": null,
+      "lead_rest_prob": null,
+      "lead_sustain": null,
+      "lead_velocity_jitter": null,
+      "lead_step_bias": null,
+      "bass_gate": null,
+      "chord_gate": null,
+      "chord_octave_shift": null,
+      "phrase_bars": null,
+      "metric_accent": null,
+      "intensity": null,
+      "final_lengthening": null,
+      "lead_syncopation": null,
+      "auto_cadence": null,
+      "cadence_beats": null,
+      "drum_fills": null,
+      "expression": null,
+      "signature": null,
+      "roles": {}
+    },
+    {
+      "name": "Verse",
+      "bars": 3,
+      "tempo": null,
+      "rhythm": null,
+      "scale": null,
+      "tonic": null,
+      "tonic_octave": null,
+      "beat_mode": null,
+      "drums_enabled": null,
+      "lead_rest_prob": null,
+      "lead_sustain": null,
+      "lead_velocity_jitter": null,
+      "lead_step_bias": null,
+      "bass_gate": null,
+      "chord_gate": null,
+      "chord_octave_shift": null,
+      "phrase_bars": null,
+      "metric_accent": null,
+      "intensity": null,
+      "final_lengthening": null,
+      "lead_syncopation": null,
+      "auto_cadence": null,
+      "cadence_beats": null,
+      "drum_fills": true,
+      "expression": null,
+      "signature": null,
+      "roles": {}
+    },
+    {
+      "name": "Chorus",
+      "bars": 2,
+      "tempo": null,
+      "rhythm": null,
+      "scale": null,
+      "tonic": null,
+      "tonic_octave": null,
+      "beat_mode": null,
+      "drums_enabled": null,
+      "lead_rest_prob": null,
+      "lead_sustain": null,
+      "lead_velocity_jitter": null,
+      "lead_step_bias": null,
+      "bass_gate": null,
+      "chord_gate": null,
+      "chord_octave_shift": null,
+      "phrase_bars": null,
+      "metric_accent": null,
+      "intensity": null,
+      "final_lengthening": null,
+      "lead_syncopation": 1.0,
+      "auto_cadence": true,
+      "cadence_beats": null,
+      "drum_fills": true,
+      "expression": null,
+      "signature": null,
+      "roles": {}
+    },
+    {
+      "name": "Solo",
+      "bars": 4,
+      "tempo": null,
+      "rhythm": null,
+      "scale": null,
+      "tonic": null,
+      "tonic_octave": null,
+      "beat_mode": null,
+      "drums_enabled": null,
+      "lead_rest_prob": null,
+      "lead_sustain": null,
+      "lead_velocity_jitter": null,
+      "lead_step_bias": null,
+      "bass_gate": null,
+      "chord_gate": null,
+      "chord_octave_shift": null,
+      "phrase_bars": null,
+      "metric_accent": null,
+      "intensity": null,
+      "final_lengthening": null,
+      "lead_syncopation": 1.0,
+      "auto_cadence": null,
+      "cadence_beats": null,
+      "drum_fills": false,
+      "expression": null,
+      "signature": null,
+      "roles": {}
+    },
+    {
+      "name": "Bridge",
+      "bars": 2,
+      "tempo": null,
+      "rhythm": null,
+      "scale": null,
+      "tonic": null,
+      "tonic_octave": null,
+      "beat_mode": null,
+      "drums_enabled": null,
+      "lead_rest_prob": null,
+      "lead_sustain": null,
+      "lead_velocity_jitter": null,
+      "lead_step_bias": null,
+      "bass_gate": null,
+      "chord_gate": null,
+      "chord_octave_shift": null,
+      "phrase_bars": null,
+      "metric_accent": null,
+      "intensity": null,
+      "final_lengthening": null,
+      "lead_syncopation": null,
+      "auto_cadence": null,
+      "cadence_beats": null,
+      "drum_fills": null,
+      "expression": null,
+      "signature": null,
+      "roles": {}
+    },
+    {
+      "name": "Outro",
+      "bars": 2,
+      "tempo": null,
+      "rhythm": null,
+      "scale": null,
+      "tonic": null,
+      "tonic_octave": null,
+      "beat_mode": null,
+      "drums_enabled": null,
+      "lead_rest_prob": null,
+      "lead_sustain": null,
+      "lead_velocity_jitter": null,
+      "lead_step_bias": null,
+      "bass_gate": null,
+      "chord_gate": null,
+      "chord_octave_shift": null,
+      "phrase_bars": null,
+      "metric_accent": null,
+      "intensity": null,
+      "final_lengthening": null,
+      "lead_syncopation": null,
+      "auto_cadence": null,
+      "cadence_beats": null,
+      "drum_fills": null,
+      "expression": null,
+      "signature": null,
+      "roles": {}
+    }
+  ],
+  "structure": [
+    {
+      "section": "Intro",
+      "transformer": null,
+      "transformer_kwargs": {},
+      "modifiers": []
+    },
+    {
+      "section": "Verse",
+      "transformer": null,
+      "transformer_kwargs": {},
+      "modifiers": []
+    },
+    {
+      "section": "Verse",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 1
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 1
+          }
+        }
+      ]
+    },
+    {
+      "section": "Verse",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Chorus",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Chorus",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Bridge",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Bridge",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        },
+        {
+          "name": "invert",
+          "kwargs": {}
+        }
+      ]
+    },
+    {
+      "section": "Verse",
+      "transformer": null,
+      "transformer_kwargs": {},
+      "modifiers": []
+    },
+    {
+      "section": "Verse",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 1
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 1
+          }
+        }
+      ]
+    },
+    {
+      "section": "Verse",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Chorus",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Chorus",
+      "transformer": "release",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "release",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Bridge",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Solo",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        },
+        {
+          "name": "invert",
+          "kwargs": {}
+        }
+      ]
+    },
+    {
+      "section": "Solo",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 3
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 3
+          }
+        }
+      ]
+    },
+    {
+      "section": "Solo",
+      "transformer": "release",
+      "transformer_kwargs": {
+        "bars": 3
+      },
+      "modifiers": [
+        {
+          "name": "release",
+          "kwargs": {
+            "bars": 3
+          }
+        }
+      ]
+    },
+    {
+      "section": "Chorus",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Chorus",
+      "transformer": "release",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "release",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Bridge",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 2
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 2
+          }
+        }
+      ]
+    },
+    {
+      "section": "Verse",
+      "transformer": null,
+      "transformer_kwargs": {},
+      "modifiers": []
+    },
+    {
+      "section": "Verse",
+      "transformer": "tension",
+      "transformer_kwargs": {
+        "bars": 1
+      },
+      "modifiers": [
+        {
+          "name": "tension",
+          "kwargs": {
+            "bars": 1
+          }
+        }
+      ]
+    },
+    {
+      "section": "Verse",
+      "transformer": "release",
+      "transformer_kwargs": {
+        "bars": 3
+      },
+      "modifiers": [
+        {
+          "name": "release",
+          "kwargs": {
+            "bars": 3
+          }
+        }
+      ]
+    },
+    {
+      "section": "Outro",
+      "transformer": "release",
+      "transformer_kwargs": {
+        "bars": 3
+      },
+      "modifiers": [
+        {
+          "name": "release",
+          "kwargs": {
+            "bars": 3
+          }
+        }
+      ]
+    }
+  ]
+}
